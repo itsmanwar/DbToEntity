@@ -10,20 +10,34 @@
 
 ---
 
+---
+
 ## Installation
 
-Install the tool globally from your local source (or NuGet if published):
+### Option 1: Install from NuGet.org (Recommended)
+Once published, you can install it globally from the official command line:
 
 ```powershell
-dotnet tool install --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbToEntity.CLI
+dotnet tool install --global MH.DbToEntity.CLI
 ```
 
-Verify installation:
+> **Important**: This is a **CLI Tool**, not a class library. You **cannot** add it to your project via "Manage NuGet Packages" in Visual Studio. You must use the command line.
+
+### Option 2: Install from Local Source (Development)
+If you are developing the tool locally:
+
 ```powershell
-db2entity --version
+dotnet tool install --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" MH.DbToEntity.CLI
 ```
 
 ---
+
+## Troubleshooting
+
+### Error: "Package type 'DotnetTool' is not supported"
+If you see this error, it means you tried to add the package to your project like a normal library (e.g., `Newtonsoft.Json`).
+-   **Wrong**: Right-click project -> Manage NuGet Packages -> Install.
+-   **Correct**: Open terminal -> `dotnet tool install --global MH.DbToEntity.CLI`.
 
 ## Quick Start
 
