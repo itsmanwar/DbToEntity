@@ -109,15 +109,6 @@ Uses `Humanizer` to ensure C# conventions:
 
 ---
 
-## Maintenance
-
-### Updating the Tool
-If you rebuild the package locally:
-```powershell
-dotnet pack "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\DbToEntity.CLI.csproj" -c Release
-dotnet tool update --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbToEntity.CLI
-```
-
 ### Uninstalling
 ```powershell
 dotnet tool uninstall -g DbToEntity.CLI
