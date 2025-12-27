@@ -30,7 +30,7 @@
 
 ## Installation
 
-You can install `dbgen` as a global .NET tool.
+You can install `db2entity` as a global .NET tool.
 
 ### 1. Pack the Tool
 Navigate to the root of the solution and pack the CLI project:
@@ -47,7 +47,7 @@ Install the tool from your local source:
 dotnet tool install --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbEntityGenerator.CLI
 ```
 
-You can now verify installation by running `dbgen --version`.
+You can now verify installation by running `db2entity --version`.
 
 ---
 
@@ -57,7 +57,7 @@ You can now verify installation by running `dbgen --version`.
 Use the `generate` command to scaffold the entire database or a specific schema.
 
 ```powershell
-dbgen generate --connection "Host=localhost;Database=mydb;Username=postgres;Password=password" --schema "public" --output "./Data/Entities" --namespace "MyApp.Domain"
+db2entity generate --connection "Host=localhost;Database=mydb;Username=postgres;Password=password" --schema "public" --output "./Data/Entities" --namespace "MyApp.Domain"
 ```
 
 **Options:**
@@ -70,7 +70,7 @@ dbgen generate --connection "Host=localhost;Database=mydb;Username=postgres;Pass
 Use the `update` command when you have modified specific tables and want to update their entities without regenerating the whole project.
 
 ```powershell
-dbgen update --connection "Host=localhost;Database=mydb;..." --tables "users,orders" --output "./Data/Entities"
+db2entity update --connection "Host=localhost;Database=mydb;..." --tables "users,orders" --output "./Data/Entities"
 ```
 
 **Options:**
