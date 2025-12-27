@@ -2,10 +2,10 @@
 using System.CommandLine;
 using System.IO;
 using System.Threading.Tasks;
-using DbEntityGenerator.Core;
+using DbToEntity.Core;
 using System.Collections.Generic;
 
-namespace DbEntityGenerator.CLI
+namespace DbToEntity.CLI
 {
     class Program
     {

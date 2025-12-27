@@ -1,7 +1,7 @@
 using System.Collections.Generic;
-using DbEntityGenerator.Core.Models;
+using DbToEntity.Core.Models;
 
-namespace DbEntityGenerator.Core
+namespace DbToEntity.Core
 {
     public struct GeneratedFile
     {

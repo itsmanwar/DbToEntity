@@ -1,6 +1,6 @@
 using System;
 
-namespace DbEntityGenerator.Core
+namespace DbToEntity.Core
 {
     public static class TypeMapper
     {

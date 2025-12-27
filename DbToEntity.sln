@@ -3,9 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DbEntityGenerator.Core", "DbEntityGenerator.Core\DbEntityGenerator.Core.csproj", "{1B6EC87F-6801-457C-9FED-6088E6830CD9}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DbToEntity.Core", "DbToEntity.Core\DbToEntity.Core.csproj", "{1B6EC87F-6801-457C-9FED-6088E6830CD9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DbEntityGenerator.CLI", "DbEntityGenerator.CLI\DbEntityGenerator.CLI.csproj", "{BAA27E9A-B38A-4DF5-9DA3-664EF9E6E508}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DbToEntity.CLI", "DbToEntity.CLI\DbToEntity.CLI.csproj", "{BAA27E9A-B38A-4DF5-9DA3-664EF9E6E508}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

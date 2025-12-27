@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\DbEntityGenerator.Core\DbEntityGenerator.Core.csproj" />
+    <ProjectReference Include="..\DbToEntity.Core\DbToEntity.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -15,7 +15,7 @@
     <Nullable>enable</Nullable>
     <Version>1.0.4</Version>
     <PackAsTool>true</PackAsTool>
-    <ToolCommandName>dbgen</ToolCommandName>
+    <ToolCommandName>db2entity</ToolCommandName>
     <PackageOutputPath>./nupkg</PackageOutputPath>
   </PropertyGroup>
 
