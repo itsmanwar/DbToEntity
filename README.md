@@ -51,10 +51,30 @@ You can now verify installation by running `db2entity --version`.
 
 ---
 
-## Usage
+## Quick Start
 
-### 1. Generate Entities (Initial Scaffold)
-Use the `generate` command to scaffold the entire database or a specific schema.
+If you are running this inside a .NET project that already has an **`appsettings.json`** with a connection string:
+
+1.  **Install**:
+    ```powershell
+    dotnet tool install --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbToEntity.CLI
+    ```
+2.  **Run**:
+    ```powershell
+    db2entity generate
+    ```
+
+That's it! The tool will:
+-   Found connection string in `appsettings.json`.
+-   Use your project name as the namespace.
+-   Generate entities in `./Entities`.
+
+---
+
+## Detailed Usage
+
+### 1. Generate Entities
+Full syntax if you need to override defaults:
 
 ```powershell
 db2entity generate --connection "..." --schema "public" --output "./Data/Entities"
@@ -83,7 +103,7 @@ db2entity update --connection "Host=localhost;Database=mydb;..." --tables "users
 
 If you pull the latest code and want to update your installed version:
 
-1.  **Check Version**: Open `DbToEntity.CLI\DbToEntity.CLI.csproj` and ensure the `<Version>` tag is incremented (e.g., `1.0.5`).
+1.  **Check Version**: Open `DbToEntity.CLI\DbToEntity.CLI.csproj` and ensure the `<Version>` tag is incremented (e.g., `1.0.7`).
 2.  **Repack**:
     ```powershell
     dotnet pack "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\DbToEntity.CLI.csproj" -c Release

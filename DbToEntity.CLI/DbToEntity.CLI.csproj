@@ -16,7 +16,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>1.0.5</Version>
+    <Version>1.0.6</Version>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>db2entity</ToolCommandName>
     <PackageOutputPath>./nupkg</PackageOutputPath>
