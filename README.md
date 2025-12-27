@@ -64,7 +64,7 @@ db2entity generate --connection "Host=localhost;Database=mydb;..." --schema "pub
 
 **Options:**
 -   `--connection`: (Optional) PostgreSQL connection string. Defaults to `appsettings.json`.
--   `--schema`: (Optional) Schema to target (default: `public`).
+-   `--schema`: (Optional) Schema to target (default: all schemas).
 -   `--output`: (Optional) Output directory (default: `./Entities`).
 -   `--namespace`: (Optional) Namespace (default: detected from `.csproj`).
 -   `--tables`: (Optional) Generate only specific tables (space separated).

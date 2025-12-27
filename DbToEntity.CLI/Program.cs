@@ -19,8 +19,7 @@ namespace DbToEntity.CLI
 
             var connectionOption = new Option<string>("--connection", "PostgreSQL connection string");
 
-            var schemaOption = new Option<string>("--schema", "Database schema");
-            schemaOption.SetDefaultValue("public");
+            var schemaOption = new Option<string>("--schema", "Database schema (optional)");
 
             var namespaceOption = new Option<string>("--namespace", "Namespace for generated code");
             namespaceOption.SetDefaultValue("GeneratedEntities");
@@ -101,7 +100,7 @@ namespace DbToEntity.CLI
 
         static async Task RunGenerate(GeneratorConfig config)
         {
-            Console.WriteLine($"Starting generation for schema '{config.Schema}'...");
+            Console.WriteLine($"Starting generation for schema '{config.Schema ?? "all"}'...");
 
             // 1. Get Metadata
             IPostgresMetadataProvider metadataProvider = new PostgresMetadataProvider();

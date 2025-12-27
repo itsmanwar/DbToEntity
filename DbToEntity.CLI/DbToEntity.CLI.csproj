@@ -17,7 +17,7 @@
 
   <PropertyGroup>
     <PackageId>MH.DbToEntity.CLI</PackageId>
-    <PackageVersion>1.0.9</PackageVersion>
+    <PackageVersion>1.1.1</PackageVersion>
     <Authors>Manwar Hossain</Authors>
     <Description>A CLI tool to generate EF Core entities from PostgreSQL, supporting partitioned tables and incremental updates.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

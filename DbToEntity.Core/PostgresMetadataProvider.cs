@@ -24,7 +24,7 @@ namespace DbToEntity.Core
                 SELECT c.oid, c.relname, c.relkind
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE n.nspname = @schema
+                WHERE (@schema IS NULL OR n.nspname = @schema)
                 AND c.relkind IN ('r', 'p')
                 AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid) -- Exclude child partitions
             ";
@@ -38,7 +38,7 @@ namespace DbToEntity.Core
 
             using (var cmd = new NpgsqlCommand(tableQuery, conn))
             {
-                cmd.Parameters.AddWithValue("schema", schema);
+                cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = schema ?? (object)DBNull.Value });
                 using (var reader = await cmd.ExecuteReaderAsync())
                 {
                     while (await reader.ReadAsync())
@@ -70,12 +70,12 @@ namespace DbToEntity.Core
             var query = @"
                 SELECT column_name, udt_name, is_nullable, character_maximum_length, column_default
                 FROM information_schema.columns
-                WHERE table_schema = @schema AND table_name = @table
+                WHERE (@schema IS NULL OR table_schema = @schema) AND table_name = @table
                 ORDER BY ordinal_position
             ";
 
             using var cmd = new NpgsqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("schema", table.Schema);
+            cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = table.Schema ?? (object)DBNull.Value });
             cmd.Parameters.AddWithValue("table", table.Name);
 
             using var reader = await cmd.ExecuteReaderAsync();
@@ -101,13 +101,13 @@ namespace DbToEntity.Core
                   ON kcu.constraint_name = tc.constraint_name
                   AND kcu.table_schema = tc.table_schema
                 WHERE tc.constraint_type = 'PRIMARY KEY'
-                  AND tc.table_schema = @schema
+                  AND (@schema IS NULL OR tc.table_schema = @schema)
                   AND tc.table_name = @table
                 ORDER BY kcu.ordinal_position
             ";
 
             using var cmd = new NpgsqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("schema", table.Schema);
+            cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = table.Schema ?? (object)DBNull.Value });
             cmd.Parameters.AddWithValue("table", table.Name);
 
             using var reader = await cmd.ExecuteReaderAsync();
@@ -136,12 +136,12 @@ namespace DbToEntity.Core
                   ON ccu.constraint_name = tc.constraint_name
                   AND ccu.table_schema = tc.table_schema
                 WHERE tc.constraint_type = 'FOREIGN KEY'
-                  AND tc.table_schema = @schema
+                  AND (@schema IS NULL OR tc.table_schema = @schema)
                   AND tc.table_name = @table
             ";
 
             using var cmd = new NpgsqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("schema", table.Schema);
+            cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = table.Schema ?? (object)DBNull.Value });
             cmd.Parameters.AddWithValue("table", table.Name);
 
             using var reader = await cmd.ExecuteReaderAsync();
