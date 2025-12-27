@@ -45,7 +45,7 @@ namespace DbToEntity.CLI
                     return;
                 }
 
-                var finalNamespace = GetNamespace(namespaceName);
+                var finalNamespace = GetNamespace(namespaceName, output);
 
                 await RunGenerate(new GeneratorConfig
                 {
@@ -82,7 +82,7 @@ namespace DbToEntity.CLI
                     return;
                 }
 
-                var finalNamespace = GetNamespace(namespaceName);
+                var finalNamespace = GetNamespace(namespaceName, output);
 
                 await RunUpdate(new GeneratorConfig
                 {
@@ -217,18 +217,49 @@ namespace DbToEntity.CLI
             return conn;
         }
 
-        static string GetNamespace(string providedNamespace)
+        static string GetNamespace(string providedNamespace, string outputDirectory)
         {
             if (!string.IsNullOrEmpty(providedNamespace) && providedNamespace != "GeneratedEntities")
                 return providedNamespace;
 
             // Try to detect csproj
-            var csproj = Directory.GetFiles(Directory.GetCurrentDirectory(), "*.csproj").FirstOrDefault();
+            var currentDir = Directory.GetCurrentDirectory();
+            var csproj = Directory.GetFiles(currentDir, "*.csproj").FirstOrDefault();
             if (csproj != null)
             {
-                var ns = Path.GetFileNameWithoutExtension(csproj);
-                Console.WriteLine($"Detected namespace from project: {ns}");
-                return ns;
+                var baseNs = Path.GetFileNameWithoutExtension(csproj);
+
+                // Calculate folder suffix if output directory is provided
+                if (!string.IsNullOrEmpty(outputDirectory))
+                {
+                    try
+                    {
+                        var fullOutputDir = Path.GetFullPath(outputDirectory);
+                        // Only add suffix if output dir is a subdirectory of current dir
+                        if (fullOutputDir.StartsWith(currentDir, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var relativePath = Path.GetRelativePath(currentDir, fullOutputDir);
+                            if (relativePath != "." && !relativePath.StartsWith(".."))
+                            {
+                                var suffix = relativePath
+                                    .Replace(Path.DirectorySeparatorChar, '.')
+                                    .Replace(Path.AltDirectorySeparatorChar, '.')
+                                    .Trim('.');
+                                if (!string.IsNullOrEmpty(suffix))
+                                {
+                                    baseNs = $"{baseNs}.{suffix}";
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore path errors, stick to base namespace
+                    }
+                }
+
+                Console.WriteLine($"Detected namespace from project: {baseNs}");
+                return baseNs;
             }
 
             return providedNamespace; // Return default if not found
