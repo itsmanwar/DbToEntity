@@ -57,14 +57,14 @@ You can now verify installation by running `db2entity --version`.
 Use the `generate` command to scaffold the entire database or a specific schema.
 
 ```powershell
-db2entity generate --connection "Host=localhost;Database=mydb;Username=postgres;Password=password" --schema "public" --output "./Data/Entities" --namespace "MyApp.Domain"
+db2entity generate --connection "..." --schema "public" --output "./Data/Entities"
 ```
 
 **Options:**
--   `--connection`: (Required) PostgreSQL connection string.
+-   `--connection`: (Optional) PostgreSQL connection string. If omitted, attempts to read `ConnectionStrings:DefaultConnection` from `appsettings.json`.
 -   `--schema`: (Optional) Database schema to target (default: `public`).
--   `--output`: (Optional) Directory for generated files (default: `./Generated`).
--   `--namespace`: (Optional) Namespace for the classes (default: `Generated`).
+-   `--output`: (Optional) Directory for generated files (default: `./Entities`).
+-   `--namespace`: (Optional) Namespace for the classes. If omitted, detects from the current project's `.csproj` file.
 
 ### 2. Update Specific Tables (Incremental)
 Use the `update` command when you have modified specific tables and want to update their entities without regenerating the whole project.
