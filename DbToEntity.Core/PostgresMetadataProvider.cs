@@ -21,7 +21,7 @@ namespace DbToEntity.Core
             // BUT we must exclude child partitions. 
             // In PG, child partitions have pg_inherits entries.
             var tableQuery = @"
-                SELECT c.oid, c.relname, c.relkind
+                SELECT c.oid, c.relname, c.relkind, n.nspname
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE (@schema IS NULL OR n.nspname = @schema)
@@ -45,7 +45,7 @@ namespace DbToEntity.Core
                     {
                         tables.Add(new TableMetadata
                         {
-                            Schema = schema,
+                            Schema = reader.GetString(3),
                             Name = reader.GetString(1),
                             IsPartitioned = reader.GetChar(2) == 'p'
                         });
@@ -60,6 +60,7 @@ namespace DbToEntity.Core
                 await LoadColumnsAsync(conn, table);
                 await LoadPrimaryKeysAsync(conn, table);
                 await LoadForeignKeysAsync(conn, table);
+                await LoadIndexesAsync(conn, table);
             }
 
             return tables;
@@ -154,6 +155,47 @@ namespace DbToEntity.Core
                     TargetSchema = reader.GetString(2),
                     TargetTable = reader.GetString(3),
                     TargetColumn = reader.GetString(4)
+                });
+            }
+        }
+
+
+        private async Task LoadIndexesAsync(NpgsqlConnection conn, TableMetadata table)
+        {
+            var query = @"
+                SELECT
+                    i.relname as index_name,
+                    ix.indisunique as is_unique,
+                    array_to_string(array_agg(a.attname), ',') as column_names
+                FROM pg_class t
+                JOIN pg_index ix ON t.oid = ix.indrelid
+                JOIN pg_class i ON i.oid = ix.indexrelid
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE t.relkind = 'r'
+                  AND (@schema IS NULL OR n.nspname = @schema)
+                  AND t.relname = @table
+                  AND ix.indisprimary = false -- Exclude Primary Keys as they are handled separately
+                GROUP BY i.relname, ix.indisunique
+                ORDER BY i.relname
+            ";
+
+            using var cmd = new NpgsqlCommand(query, conn);
+            cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = table.Schema ?? (object)DBNull.Value });
+            cmd.Parameters.AddWithValue("table", table.Name);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var indexName = reader.GetString(0);
+                var isUnique = reader.GetBoolean(1);
+                var columns = reader.GetString(2).Split(',').ToList();
+
+                table.Indexes.Add(new IndexMetadata
+                {
+                    Name = indexName,
+                    IsUnique = isUnique,
+                    Columns = columns
                 });
             }
         }

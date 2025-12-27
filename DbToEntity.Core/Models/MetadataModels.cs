@@ -11,6 +11,7 @@ namespace DbToEntity.Core.Models
         public string? PrimaryKeyName { get; set; }
         public List<ForeignKeyMetadata> ForeignKeys { get; set; } = new();
         public bool IsPartitioned { get; set; }
+        public List<IndexMetadata> Indexes { get; set; } = new();
     }
 
     public class ColumnMetadata
@@ -29,5 +30,12 @@ namespace DbToEntity.Core.Models
         public string TargetSchema { get; set; } = string.Empty;
         public string TargetTable { get; set; } = string.Empty;
         public string TargetColumn { get; set; } = string.Empty;
+    }
+
+    public class IndexMetadata
+    {
+        public string Name { get; set; } = string.Empty;
+        public List<string> Columns { get; set; } = new();
+        public bool IsUnique { get; set; }
     }
 }
