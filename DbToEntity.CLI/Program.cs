@@ -4,6 +4,8 @@ using System.IO;
 using System.Threading.Tasks;
 using DbToEntity.Core;
 using System.Collections.Generic;
+using Microsoft.Extensions.Configuration;
+using System.Linq;
 
 namespace DbToEntity.CLI
 {
@@ -15,7 +17,7 @@ namespace DbToEntity.CLI
 
             var generateCommand = new Command("generate", "Generate entities from database");
 
-            var connectionOption = new Option<string>("--connection", "PostgreSQL connection string") { IsRequired = true };
+            var connectionOption = new Option<string>("--connection", "PostgreSQL connection string");
 
             var schemaOption = new Option<string>("--schema", "Database schema");
             schemaOption.SetDefaultValue("public");
@@ -36,11 +38,20 @@ namespace DbToEntity.CLI
 
             generateCommand.SetHandler(async (connection, schema, namespaceName, output, tables) =>
             {
+                var finalConnection = GetConnectionString(connection);
+                if (string.IsNullOrEmpty(finalConnection))
+                {
+                    Console.WriteLine("Error: Connection string not provided and not found in appsettings.json.");
+                    return;
+                }
+
+                var finalNamespace = GetNamespace(namespaceName);
+
                 await RunGenerate(new GeneratorConfig
                 {
-                    ConnectionString = connection,
+                    ConnectionString = finalConnection,
                     Schema = schema,
-                    Namespace = namespaceName,
+                    Namespace = finalNamespace,
                     OutputDirectory = output,
                     IncludedTables = tables != null ? new List<string>(tables) : new List<string>()
                 });
@@ -64,11 +75,20 @@ namespace DbToEntity.CLI
                     return;
                 }
 
+                var finalConnection = GetConnectionString(connection);
+                if (string.IsNullOrEmpty(finalConnection))
+                {
+                    Console.WriteLine("Error: Connection string not provided and not found in appsettings.json.");
+                    return;
+                }
+
+                var finalNamespace = GetNamespace(namespaceName);
+
                 await RunUpdate(new GeneratorConfig
                 {
-                    ConnectionString = connection,
+                    ConnectionString = finalConnection,
                     Schema = schema,
-                    Namespace = namespaceName,
+                    Namespace = finalNamespace,
                     OutputDirectory = output,
                     IncludedTables = new List<string>(tables)
                 });
@@ -159,6 +179,59 @@ namespace DbToEntity.CLI
             }
 
             Console.WriteLine("Update complete.");
+        }
+        static string GetConnectionString(string providedConnection)
+        {
+            if (!string.IsNullOrEmpty(providedConnection)) return providedConnection;
+
+            // Try to read from appsettings.json
+            var currentDir = Directory.GetCurrentDirectory();
+            var builder = new ConfigurationBuilder()
+                .SetBasePath(currentDir)
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+                .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: false);
+
+            var configuration = builder.Build();
+
+            // Try standard keys
+            var conn = configuration.GetConnectionString("DefaultConnection");
+            if (string.IsNullOrEmpty(conn))
+            {
+                conn = configuration.GetConnectionString("Postgres");
+            }
+            if (string.IsNullOrEmpty(conn))
+            {
+                // Fallback: check "ConnectionStrings:*"
+                var section = configuration.GetSection("ConnectionStrings");
+                if (section.Exists())
+                {
+                    conn = section.GetChildren().FirstOrDefault()?.Value;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(conn))
+            {
+                Console.WriteLine("Using connection string from appsettings.json");
+            }
+
+            return conn;
+        }
+
+        static string GetNamespace(string providedNamespace)
+        {
+            if (!string.IsNullOrEmpty(providedNamespace) && providedNamespace != "GeneratedEntities")
+                return providedNamespace;
+
+            // Try to detect csproj
+            var csproj = Directory.GetFiles(Directory.GetCurrentDirectory(), "*.csproj").FirstOrDefault();
+            if (csproj != null)
+            {
+                var ns = Path.GetFileNameWithoutExtension(csproj);
+                Console.WriteLine($"Detected namespace from project: {ns}");
+                return ns;
+            }
+
+            return providedNamespace; // Return default if not found
         }
     }
 }
