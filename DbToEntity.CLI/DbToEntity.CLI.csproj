@@ -17,6 +17,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Version>1.0.6</Version>
+    <Authors>DbToEntity</Authors>
+    <Description>A CLI tool to generate EF Core entities from PostgreSQL, supporting partitioned tables and incremental updates.</Description>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>db2entity</ToolCommandName>
     <PackageOutputPath>./nupkg</PackageOutputPath>
