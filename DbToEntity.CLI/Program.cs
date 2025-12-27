@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using Microsoft.Extensions.Configuration;
 using System.Linq;
 
+using Humanizer;
+
 namespace DbToEntity.CLI
 {
     class Program
@@ -29,13 +31,16 @@ namespace DbToEntity.CLI
 
             var tableOption = new Option<string[]>("--tables", "Specific tables to generate (space separated)") { AllowMultipleArgumentsPerToken = true };
 
+            var separateBySchemaOption = new Option<bool>("--separate-by-schema", "Organize entities into folders by schema");
+
             generateCommand.AddOption(connectionOption);
             generateCommand.AddOption(schemaOption);
             generateCommand.AddOption(namespaceOption);
             generateCommand.AddOption(outputOption);
             generateCommand.AddOption(tableOption);
+            generateCommand.AddOption(separateBySchemaOption);
 
-            generateCommand.SetHandler(async (connection, schema, namespaceName, output, tables) =>
+            generateCommand.SetHandler(async (connection, schema, namespaceName, output, tables, separate) =>
             {
                 var finalConnection = GetConnectionString(connection);
                 if (string.IsNullOrEmpty(finalConnection))
@@ -52,9 +57,10 @@ namespace DbToEntity.CLI
                     Schema = schema,
                     Namespace = finalNamespace,
                     OutputDirectory = output,
-                    IncludedTables = tables != null ? new List<string>(tables) : new List<string>()
+                    IncludedTables = tables != null ? new List<string>(tables) : new List<string>(),
+                    SeparateBySchema = separate
                 });
-            }, connectionOption, schemaOption, namespaceOption, outputOption, tableOption);
+            }, connectionOption, schemaOption, namespaceOption, outputOption, tableOption, separateBySchemaOption);
 
             rootCommand.AddCommand(generateCommand);
 
@@ -65,8 +71,9 @@ namespace DbToEntity.CLI
             updateCommand.AddOption(outputOption);
             // reused options, tableOption is required for update ideally
             updateCommand.AddOption(tableOption);
+            updateCommand.AddOption(separateBySchemaOption);
 
-            updateCommand.SetHandler(async (connection, schema, namespaceName, output, tables) =>
+            updateCommand.SetHandler(async (connection, schema, namespaceName, output, tables, separate) =>
             {
                 if (tables == null || tables.Length == 0)
                 {
@@ -89,9 +96,10 @@ namespace DbToEntity.CLI
                     Schema = schema,
                     Namespace = finalNamespace,
                     OutputDirectory = output,
-                    IncludedTables = new List<string>(tables)
+                    IncludedTables = new List<string>(tables),
+                    SeparateBySchema = separate
                 });
-            }, connectionOption, schemaOption, namespaceOption, outputOption, tableOption);
+            }, connectionOption, schemaOption, namespaceOption, outputOption, tableOption, separateBySchemaOption);
 
             rootCommand.AddCommand(updateCommand);
 
@@ -116,14 +124,26 @@ namespace DbToEntity.CLI
             foreach (var table in tables)
             {
                 Console.WriteLine($"Generating entity for {table.Name}...");
-                var file = generator.GenerateEntity(table, config.Namespace);
-                var path = Path.Combine(config.OutputDirectory, file.FileName);
+
+                var targetDirectory = config.OutputDirectory;
+                var targetNamespace = config.Namespace;
+
+                if (config.SeparateBySchema && !string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
+                {
+                    var schemaFolder = table.Schema.Pascalize();
+                    targetDirectory = Path.Combine(config.OutputDirectory, schemaFolder);
+                    targetNamespace = $"{config.Namespace}.{schemaFolder}";
+                    Directory.CreateDirectory(targetDirectory);
+                }
+
+                var file = generator.GenerateEntity(table, targetNamespace);
+                var path = Path.Combine(targetDirectory, file.FileName);
                 await File.WriteAllTextAsync(path, file.Content);
             }
 
             // For Generate, we overwrite DbContext
             Console.WriteLine("Generating DbContext...");
-            var dbContextFile = generator.GenerateDbContext(tables, config.Namespace, config.DbContextName);
+            var dbContextFile = generator.GenerateDbContext(tables, config.Namespace, config.DbContextName, config.SeparateBySchema); // Pass flag
             await File.WriteAllTextAsync(Path.Combine(config.OutputDirectory, dbContextFile.FileName), dbContextFile.Content);
 
             Console.WriteLine("Generation complete.");
@@ -150,8 +170,20 @@ namespace DbToEntity.CLI
             foreach (var table in tables)
             {
                 Console.WriteLine($"Updating entity for {table.Name}...");
-                var file = generator.GenerateEntity(table, config.Namespace);
-                var path = Path.Combine(config.OutputDirectory, file.FileName);
+
+                var targetDirectory = config.OutputDirectory;
+                var targetNamespace = config.Namespace;
+
+                if (config.SeparateBySchema && !string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
+                {
+                    var schemaFolder = table.Schema.Pascalize();
+                    targetDirectory = Path.Combine(config.OutputDirectory, schemaFolder);
+                    targetNamespace = $"{config.Namespace}.{schemaFolder}";
+                    Directory.CreateDirectory(targetDirectory);
+                }
+
+                var file = generator.GenerateEntity(table, targetNamespace);
+                var path = Path.Combine(targetDirectory, file.FileName);
                 await File.WriteAllTextAsync(path, file.Content);
             }
 

@@ -170,7 +170,7 @@ namespace DbToEntity.Core
             return AttributeArgumentList(SeparatedList(args));
         }
 
-        public GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName)
+        public GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName, bool separateBySchema = false)
         {
             var dbSets = new List<MemberDeclarationSyntax>();
 
@@ -363,10 +363,30 @@ namespace DbToEntity.Core
             var namespaceDeclaration = NamespaceDeclaration(ParseName(namespaceName))
                 .AddMembers(classDeclaration);
 
+            var usings = new List<UsingDirectiveSyntax>
+            {
+                UsingDirective(ParseName("System")),
+                UsingDirective(ParseName("System.ComponentModel.DataAnnotations")),
+                UsingDirective(ParseName("System.ComponentModel.DataAnnotations.Schema")),
+                UsingDirective(ParseName("Microsoft.EntityFrameworkCore"))
+            };
+
+            if (separateBySchema)
+            {
+                var schemas = tables
+                    .Select(t => t.Schema)
+                    .Where(s => !string.IsNullOrEmpty(s) && s != "public")
+                    .Distinct()
+                    .OrderBy(s => s);
+
+                foreach (var schema in schemas)
+                {
+                    usings.Add(UsingDirective(ParseName($"{namespaceName}.{schema.Pascalize()}")));
+                }
+            }
+
             var cu = CompilationUnit()
-                .AddUsings(
-                    UsingDirective(ParseName("System")),
-                    UsingDirective(ParseName("Microsoft.EntityFrameworkCore")))
+                .AddUsings(usings.ToArray())
                 .AddMembers(namespaceDeclaration)
                 .NormalizeWhitespace();
 
