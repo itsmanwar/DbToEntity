@@ -1,8 +1,8 @@
-# DbEntityGenerator
+# DbToEntity
 
 **A Custom EF Core Entity Generator for PostgreSQL**
 
-`DbEntityGenerator` is a CLI tool designed to generate Entity Framework Core entities from an existing PostgreSQL database. It is specifically built to handle **Partitioned Tables** (generating entities only for parent tables) and supports **Incremental Updates** (updating specific entities without overwriting the entire model).
+`DbToEntity` is a CLI tool designed to generate Entity Framework Core entities from an existing PostgreSQL database. It is specifically built to handle **Partitioned Tables** (generating entities only for parent tables) and supports **Incremental Updates** (updating specific entities without overwriting the entire model).
 
 ---
 
