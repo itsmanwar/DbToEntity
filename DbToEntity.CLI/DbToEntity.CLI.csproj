@@ -12,16 +12,19 @@
   </ItemGroup>
 
   <PropertyGroup>
+    <PackageId>mh.DbToEntity.CLI</PackageId>
+    <PackageVersion>1.0.6</PackageVersion>
+    <Authors>Manwar Hossain</Authors>
+    <Description>A CLI tool to generate EF Core entities from PostgreSQL, supporting partitioned tables and incremental updates.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/ManwarHossain/DbToEntity</PackageProjectUrl>
+    <PackageTags>ef-core;postgresql;postgresql-partition-scaffold;dotnet-tool</PackageTags>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>1.0.6</Version>
-    <Authors>DbToEntity</Authors>
-    <Description>A CLI tool to generate EF Core entities from PostgreSQL, supporting partitioned tables and incremental updates.</Description>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>db2entity</ToolCommandName>
     <PackageOutputPath>./nupkg</PackageOutputPath>
   </PropertyGroup>
-
 </Project>
