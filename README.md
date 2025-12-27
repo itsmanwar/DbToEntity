@@ -44,7 +44,7 @@ This generates a `.nupkg` file in `DbToEntity.CLI\nupkg`.
 Install the tool from your local source:
 
 ```powershell
-dotnet tool install --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbEntityGenerator.CLI
+dotnet tool install --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbToEntity.CLI
 ```
 
 You can now verify installation by running `db2entity --version`.
@@ -90,7 +90,7 @@ If you pull the latest code and want to update your installed version:
     ```
 3.  **Update**:
     ```powershell
-    dotnet tool update --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbEntityGenerator.CLI
+    dotnet tool update --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbToEntity.CLI
     ```
 
 ---
@@ -100,5 +100,5 @@ If you pull the latest code and want to update your installed version:
 To remove the tool from your system:
 
 ```powershell
-dotnet tool uninstall -g DbEntityGenerator.CLI
+dotnet tool uninstall -g DbToEntity.CLI
 ```
