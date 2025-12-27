@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace DbEntityGenerator.Core
+namespace DbToEntity.Core
 {
     public class GeneratorConfig
     {

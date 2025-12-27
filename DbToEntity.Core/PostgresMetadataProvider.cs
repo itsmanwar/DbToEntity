@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using DbEntityGenerator.Core.Models;
+using DbToEntity.Core.Models;
 using Npgsql;
 
-namespace DbEntityGenerator.Core
+namespace DbToEntity.Core
 {
     public class PostgresMetadataProvider : IPostgresMetadataProvider
     {

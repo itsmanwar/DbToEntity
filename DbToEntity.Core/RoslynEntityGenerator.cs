@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 using System.Linq;
-using DbEntityGenerator.Core.Models;
+using DbToEntity.Core.Models;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -9,7 +9,7 @@ using static Microsoft.CodeAnalysis.CSharp.SyntaxFactory;
 
 using Humanizer;
 
-namespace DbEntityGenerator.Core
+namespace DbToEntity.Core
 {
     public class RoslynEntityGenerator : IEntityGenerator
     {

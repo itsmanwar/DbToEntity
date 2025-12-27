@@ -36,15 +36,15 @@ You can install `dbgen` as a global .NET tool.
 Navigate to the root of the solution and pack the CLI project:
 
 ```powershell
-dotnet pack "d:\Experiment\DOT NET\DB_to_Entity\DbEntityGenerator.CLI\DbEntityGenerator.CLI.csproj" -c Release
+dotnet pack "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\DbToEntity.CLI.csproj" -c Release
 ```
-This generates a `.nupkg` file in `DbEntityGenerator.CLI\nupkg`.
+This generates a `.nupkg` file in `DbToEntity.CLI\nupkg`.
 
 ### 2. Install Globally
 Install the tool from your local source:
 
 ```powershell
-dotnet tool install --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbEntityGenerator.CLI\nupkg" DbEntityGenerator.CLI
+dotnet tool install --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbEntityGenerator.CLI
 ```
 
 You can now verify installation by running `dbgen --version`.
@@ -83,14 +83,14 @@ dbgen update --connection "Host=localhost;Database=mydb;..." --tables "users,ord
 
 If you pull the latest code and want to update your installed version:
 
-1.  **Check Version**: Open `DbEntityGenerator.CLI\DbEntityGenerator.CLI.csproj` and ensure the `<Version>` tag is incremented (e.g., `1.0.5`).
+1.  **Check Version**: Open `DbToEntity.CLI\DbToEntity.CLI.csproj` and ensure the `<Version>` tag is incremented (e.g., `1.0.5`).
 2.  **Repack**:
     ```powershell
-    dotnet pack "d:\Experiment\DOT NET\DB_to_Entity\DbEntityGenerator.CLI\DbEntityGenerator.CLI.csproj" -c Release
+    dotnet pack "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\DbToEntity.CLI.csproj" -c Release
     ```
 3.  **Update**:
     ```powershell
-    dotnet tool update --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbEntityGenerator.CLI\nupkg" DbEntityGenerator.CLI
+    dotnet tool update --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbEntityGenerator.CLI
     ```
 
 ---

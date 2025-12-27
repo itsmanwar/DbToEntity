@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace DbEntityGenerator.Core.Models
+namespace DbToEntity.Core.Models
 {
     public class TableMetadata
     {

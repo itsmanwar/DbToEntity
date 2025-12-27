@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\DbEntityGenerator.Core\DbEntityGenerator.Core.csproj" />
+    <ProjectReference Include="..\DbToEntity.Core\DbToEntity.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
