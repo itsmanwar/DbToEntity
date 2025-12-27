@@ -10,20 +10,32 @@
 
 ---
 
+---
+
 ## Installation
 
-Install the tool globally from your local source (or NuGet if published):
+### 1. Install Global Tool (Standard)
+Install explicitly from NuGet.org:
 
 ```powershell
-dotnet tool install --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbToEntity.CLI
+dotnet tool install --global MH.DbToEntity.CLI
 ```
 
-Verify installation:
+### 2. Update Tool
+To get the latest version later:
+
 ```powershell
-db2entity --version
+dotnet tool update --global MH.DbToEntity.CLI
 ```
 
 ---
+
+## Troubleshooting
+
+### Error: "Package type 'DotnetTool' is not supported"
+If you see this, you likely tried to "Manage NuGet Packages" and add it to a project. **Do not do that.**
+This is a CLI tool. Install it on your machine using the console commands above.
+Then run it using `db2entity generate`.
 
 ## Quick Start
 
@@ -96,15 +108,6 @@ Uses `Humanizer` to ensure C# conventions:
 -   Foreign Key `role_id` -> Navigation `Role`
 
 ---
-
-## Maintenance
-
-### Updating the Tool
-If you rebuild the package locally:
-```powershell
-dotnet pack "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\DbToEntity.CLI.csproj" -c Release
-dotnet tool update --global --add-source "d:\Experiment\DOT NET\DB_to_Entity\DbToEntity.CLI\nupkg" DbToEntity.CLI
-```
 
 ### Uninstalling
 ```powershell
