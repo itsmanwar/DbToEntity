@@ -21,10 +21,11 @@ namespace DbToEntity.Core
             // BUT we must exclude child partitions. 
             // In PG, child partitions have pg_inherits entries.
             var tableQuery = @"
-                SELECT c.oid, c.relname, c.relkind, n.nspname
+                SELECT c.oid, c.relname, c.relkind
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE (@schema IS NULL OR n.nspname = @schema)
+                AND (@schema IS NOT NULL OR (n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'))
                 AND c.relkind IN ('r', 'p')
                 AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid) -- Exclude child partitions
             ";
@@ -61,6 +62,24 @@ namespace DbToEntity.Core
                 await LoadPrimaryKeysAsync(conn, table);
                 await LoadForeignKeysAsync(conn, table);
                 await LoadIndexesAsync(conn, table);
+            }
+
+            // 3. Post-processing: Filter Foreign Keys and Populate Inverse
+            var validTableNames = new HashSet<string>(tables.Select(t => t.Name));
+            foreach (var table in tables)
+            {
+                // Remove FKs pointing to non-existent tables (e.g., partitions excluded from extraction)
+                table.ForeignKeys.RemoveAll(fk => !validTableNames.Contains(fk.TargetTable));
+
+                // Populate inverse relationships
+                foreach (var fk in table.ForeignKeys)
+                {
+                    var targetTable = tables.FirstOrDefault(t => t.Name == fk.TargetTable);
+                    if (targetTable != null)
+                    {
+                        targetTable.ReferencingForeignKeys.Add(fk);
+                    }
+                }
             }
 
             return tables;
@@ -124,21 +143,26 @@ namespace DbToEntity.Core
         {
             var query = @"
                 SELECT
-                    kcu.constraint_name,
-                    kcu.column_name,
-                    ccu.table_schema AS target_schema,
-                    ccu.table_name AS target_table,
-                    ccu.column_name AS target_column
-                FROM information_schema.key_column_usage kcu
-                JOIN information_schema.table_constraints tc
-                  ON kcu.constraint_name = tc.constraint_name
-                  AND kcu.table_schema = tc.table_schema
-                JOIN information_schema.constraint_column_usage ccu
-                  ON ccu.constraint_name = tc.constraint_name
-                  AND ccu.table_schema = tc.table_schema
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-                  AND (@schema IS NULL OR tc.table_schema = @schema)
-                  AND tc.table_name = @table
+                      con.conname,
+                      c.relname AS source_table,
+                      (SELECT array_to_string(array_agg(a.attname ORDER BY array_position(con.conkey, a.attnum)), ',')
+                       FROM pg_attribute a
+                       WHERE a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+                      ) AS source_columns,
+                      tn.nspname AS target_schema,
+                      t.relname AS target_table,
+                      (SELECT array_to_string(array_agg(a.attname ORDER BY array_position(con.confkey, a.attnum)), ',')
+                       FROM pg_attribute a
+                       WHERE a.attrelid = con.confrelid AND a.attnum = ANY(con.confkey)
+                      ) AS target_columns
+                  FROM pg_constraint con
+                  JOIN pg_class c ON c.oid = con.conrelid
+                  JOIN pg_namespace n ON n.oid = con.connamespace
+                  JOIN pg_class t ON t.oid = con.confrelid
+                  JOIN pg_namespace tn ON tn.oid = t.relnamespace
+                  WHERE con.contype = 'f'
+                    AND (@schema IS NULL OR n.nspname = @schema)
+                    AND c.relname = @table
             ";
 
             using var cmd = new NpgsqlCommand(query, conn);
@@ -151,10 +175,11 @@ namespace DbToEntity.Core
                 table.ForeignKeys.Add(new ForeignKeyMetadata
                 {
                     ConstraintName = reader.GetString(0),
-                    SourceColumn = reader.GetString(1),
-                    TargetSchema = reader.GetString(2),
-                    TargetTable = reader.GetString(3),
-                    TargetColumn = reader.GetString(4)
+                    SourceTable = reader.GetString(1),
+                    SourceColumns = reader.GetString(2).Split(',').ToList(),
+                    TargetSchema = reader.GetString(3),
+                    TargetTable = reader.GetString(4),
+                    TargetColumns = reader.GetString(5).Split(',').ToList()
                 });
             }
         }
