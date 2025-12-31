@@ -24,7 +24,8 @@ namespace DbToEntity.Core
                 SELECT c.oid, c.relname, c.relkind
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE n.nspname = @schema
+                WHERE (@schema IS NULL OR n.nspname = @schema)
+                AND (@schema IS NOT NULL OR (n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'))
                 AND c.relkind IN ('r', 'p')
                 AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid) -- Exclude child partitions
             ";
