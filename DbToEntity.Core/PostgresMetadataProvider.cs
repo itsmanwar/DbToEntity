@@ -26,7 +26,7 @@ namespace DbToEntity.Core
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE (@schema IS NULL OR n.nspname = @schema)
                 AND (@schema IS NOT NULL OR (n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'))
-                AND c.relkind IN ('r', 'p')
+                AND c.relkind IN ('r', 'p', 'v', 'm')
                 AND NOT EXISTS (SELECT 1 FROM pg_inherits i JOIN pg_class p ON i.inhparent = p.oid WHERE i.inhrelid = c.oid AND p.relkind = 'p') -- Exclude declarative partitions, allow inheritance
             ";
 
@@ -44,11 +44,20 @@ namespace DbToEntity.Core
                 {
                     while (await reader.ReadAsync())
                     {
+                        var relKind = reader.GetChar(2);
+                        var type = relKind switch
+                        {
+                            'v' => ObjectType.View,
+                            'm' => ObjectType.MaterializedView,
+                            _ => ObjectType.Table
+                        };
+
                         tables.Add(new TableMetadata
                         {
                             Schema = reader.GetString(3),
                             Name = reader.GetString(1),
-                            IsPartitioned = reader.GetChar(2) == 'p'
+                            IsPartitioned = relKind == 'p',
+                            Type = type
                         });
                     }
                 }

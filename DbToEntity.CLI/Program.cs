@@ -214,13 +214,25 @@ namespace DbToEntity.CLI
                 var targetDirectory = config.OutputDirectory;
                 var targetNamespace = config.Namespace;
 
-                if (config.SeparateBySchema && !string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
+                if (config.SeparateBySchema)
                 {
-                    var schemaFolder = table.Schema.Pascalize();
-                    targetDirectory = Path.Combine(config.OutputDirectory, schemaFolder);
-                    targetNamespace = $"{config.Namespace}.{schemaFolder}";
+                    // 1. Schema Folder (if not public)
+                    if (!string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
+                    {
+                        var schemaFolder = table.Schema.Pascalize();
+                        targetDirectory = Path.Combine(targetDirectory, schemaFolder);
+                        targetNamespace = $"{targetNamespace}.{schemaFolder}";
+                    }
+
+                    // 2. Type Folder (Tables/Views)
+                    var typeFolder = table.Type.ToString().Pluralize(); // Tables, Views, MaterializedViews
+                    targetDirectory = Path.Combine(targetDirectory, typeFolder);
+                    targetNamespace = $"{targetNamespace}.{typeFolder}";
+
                     Directory.CreateDirectory(targetDirectory);
                 }
+
+                table.Namespace = targetNamespace; // Store for DbContext generation
 
                 var file = generator.GenerateEntity(table, targetNamespace);
                 var path = Path.Combine(targetDirectory, file.FileName);

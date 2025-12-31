@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Linq;
 using DbToEntity.Core.Models;
 using Microsoft.CodeAnalysis;
@@ -46,7 +47,7 @@ namespace DbToEntity.Core
                 // Columns
                 foreach (var col in index.Columns)
                 {
-                    indexArgs.Add(AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.Pascalize()))));
+                    indexArgs.Add(AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(SanitizeIdentifier(col)))));
                 }
 
                 // Name
@@ -71,7 +72,7 @@ namespace DbToEntity.Core
             foreach (var col in table.Columns)
             {
                 var typeName = TypeMapper.Map(col.DataType, col.IsNullable);
-                var propName = col.Name.Pascalize();
+                var propName = SanitizeIdentifier(col.Name);
                 if (propName == className) propName += "Member";
                 var attributes = new List<AttributeSyntax>();
 
@@ -121,7 +122,7 @@ namespace DbToEntity.Core
             foreach (var fk in table.ForeignKeys)
             {
                 var targetClassName = fk.TargetClassName;
-                var sourceProps = fk.SourceColumns.Select(c => c.Pascalize()).ToList();
+                var sourceProps = fk.SourceColumns.Select(c => SanitizeIdentifier(c)).ToList();
                 var sourcePropNameString = string.Join(", ", sourceProps);
 
                 string navPropName;
@@ -214,7 +215,7 @@ namespace DbToEntity.Core
             foreach (var fk in table.ReferencingForeignKeys)
             {
                 var sourceClassName = fk.SourceClassName;
-                var sourceProps = fk.SourceColumns.Select(c => c.Pascalize()).ToList();
+                var sourceProps = fk.SourceColumns.Select(c => SanitizeIdentifier(c)).ToList();
 
                 string propName;
                 bool isMultiple = refFkGroups.ContainsKey(sourceClassName) && refFkGroups[sourceClassName].Count > 1;
@@ -360,7 +361,9 @@ namespace DbToEntity.Core
                 // entity => { ... }
                 var lambdaStatements = new List<StatementSyntax>();
 
-                // .ToTable("name", "schema")
+                // .ToTable("name", "schema") or .ToView("name", "schema")
+                string mappingMethod = (table.Type == ObjectType.View || table.Type == ObjectType.MaterializedView) ? "ToView" : "ToTable";
+
                 var toTableArgs = new List<ArgumentSyntax> { Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.Name))) };
                 if (!string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
                 {
@@ -369,13 +372,13 @@ namespace DbToEntity.Core
 
                 lambdaStatements.Add(ExpressionStatement(
                     InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("ToTable")))
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName(mappingMethod)))
                     .WithArgumentList(ArgumentList(SeparatedList(toTableArgs)))));
 
-                // .HasKey(e => e.Id)
+                // .HasKey(e => e.Id) or .HasNoKey()
                 if (table.PrimaryKeys.Any())
                 {
-                    var keyProps = table.PrimaryKeys.Select(k => k.Pascalize());
+                    var keyProps = table.PrimaryKeys.Select(k => SanitizeIdentifier(k));
                     ExpressionSyntax keyExpression;
                     if (keyProps.Count() == 1)
                     {
@@ -403,11 +406,20 @@ namespace DbToEntity.Core
 
                     lambdaStatements.Add(ExpressionStatement(hasKeyInvocation));
                 }
+                else
+                {
+                    // Keyless Entity (View)
+                    lambdaStatements.Add(ExpressionStatement(
+                       InvocationExpression(
+                           MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("HasNoKey")))));
+                }
+
 
                 // Properties
                 foreach (var col in table.Columns)
                 {
-                    var propName = col.Name.Pascalize();
+                    var propName = SanitizeIdentifier(col.Name);
+                    if (propName == className) propName += "Member";
                     var propertyAccess = InvocationExpression(
                         MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("Property")))
                         .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
@@ -418,7 +430,7 @@ namespace DbToEntity.Core
 
                     currentExpression = InvocationExpression(
                         MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasColumnName")))
-                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.Name))))));
+                                    .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.Name))))));
 
                     if (!string.IsNullOrEmpty(col.DefaultValue))
                     {
@@ -447,7 +459,7 @@ namespace DbToEntity.Core
                 foreach (var fk in table.ForeignKeys)
                 {
                     var navPropName = fk.TargetClassName; // Use resolved name
-                    var sourceProps = fk.SourceColumns.Select(c => c.Pascalize()).ToList();
+                    var sourceProps = fk.SourceColumns.Select(c => SanitizeIdentifier(c)).ToList();
 
                     if (sourceProps.Contains(navPropName)) navPropName += "Nav";
 
@@ -513,18 +525,15 @@ namespace DbToEntity.Core
                 UsingDirective(ParseName("Microsoft.EntityFrameworkCore"))
             };
 
-            if (separateBySchema)
-            {
-                var schemas = tables
-                    .Select(t => t.Schema)
-                    .Where(s => !string.IsNullOrEmpty(s) && s != "public")
-                    .Distinct()
-                    .OrderBy(s => s);
+            var distinctNamespaces = tables
+                .Select(t => t.Namespace)
+                .Where(n => !string.IsNullOrEmpty(n) && n != namespaceName)
+                .Distinct()
+                .OrderBy(n => n);
 
-                foreach (var schema in schemas)
-                {
-                    usings.Add(UsingDirective(ParseName($"{namespaceName}.{schema.Pascalize()}")));
-                }
+            foreach (var ns in distinctNamespaces)
+            {
+                usings.Add(UsingDirective(ParseName(ns)));
             }
 
             var cu = CompilationUnit()
@@ -600,6 +609,21 @@ namespace DbToEntity.Core
         private string ToPascalCase(string original)
         {
             return original.Pascalize();
+        }
+
+        private string SanitizeIdentifier(string name)
+        {
+            // 1. Replace invalid chars with underscore (keep alphanumeric)
+            var clean = Regex.Replace(name, @"[^a-zA-Z0-9_]", "_");
+
+            // 2. Pascalize (handles underscores by Capitalizing next char)
+            var pascal = clean.Pascalize();
+
+            // 3. Ensure valid start
+            if (string.IsNullOrEmpty(pascal)) return "Property_" + System.Guid.NewGuid().ToString("N").Substring(0, 4); // Fallback
+            if (char.IsDigit(pascal[0])) return "_" + pascal;
+
+            return pascal;
         }
     }
 }

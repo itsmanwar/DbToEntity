@@ -7,6 +7,7 @@ namespace DbToEntity.Core.Models
         public string Schema { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
         public string ClassName { get; set; } = string.Empty; // Resolved class name to avoid collisions
+        public string Namespace { get; set; } = string.Empty; // Generated namespace
         public List<ColumnMetadata> Columns { get; set; } = new();
         public List<string> PrimaryKeys { get; set; } = new();
         public string? PrimaryKeyName { get; set; }
@@ -14,6 +15,14 @@ namespace DbToEntity.Core.Models
         public List<ForeignKeyMetadata> ReferencingForeignKeys { get; set; } = new();
         public bool IsPartitioned { get; set; }
         public List<IndexMetadata> Indexes { get; set; } = new();
+        public ObjectType Type { get; set; } = ObjectType.Table;
+    }
+
+    public enum ObjectType
+    {
+        Table,
+        View,
+        MaterializedView
     }
 
     public class ColumnMetadata
