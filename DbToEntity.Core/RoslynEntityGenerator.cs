@@ -88,15 +88,16 @@ namespace DbToEntity.Core
             foreach (var fk in table.ForeignKeys)
             {
                 var targetClassName = fk.TargetTable.Singularize().Pascalize();
-                var sourcePropName = fk.SourceColumn.Pascalize();
+                var sourceProps = fk.SourceColumns.Select(c => c.Pascalize()).ToList();
+                var sourcePropNameString = string.Join(", ", sourceProps);
                 var navPropName = targetClassName;
 
-                if (navPropName == sourcePropName) navPropName += "Nav";
+                if (sourceProps.Contains(navPropName)) navPropName += "Nav";
 
-                // [ForeignKey("RoleId")]
+                // [ForeignKey("RoleId")] or [ForeignKey("Id, Year")]
                 var fkAttr = Attribute(IdentifierName("ForeignKey"),
                     AttributeArgumentList(SingletonSeparatedList(
-                        AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(sourcePropName))))));
+                        AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(sourcePropNameString))))));
 
                 var navProperty = PropertyDeclaration(ParseTypeName(targetClassName), navPropName)
                     .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.VirtualKeyword))
@@ -107,6 +108,34 @@ namespace DbToEntity.Core
 
                 properties.Add(navProperty);
             }
+
+            // Inverse Navigation Properties (Collections)
+            foreach (var fk in table.ReferencingForeignKeys)
+            {
+                var sourceClassName = fk.SourceTable.Singularize().Pascalize();
+                var collectionType = $"ICollection<{sourceClassName}>";
+                var propName = sourceClassName.Pluralize();
+
+                // Avoid duplicate names if property already exists
+                if (properties.OfType<PropertyDeclarationSyntax>().Any(p => p.Identifier.Text == propName))
+                {
+                    propName += "Collection";
+                }
+
+                var collectionProperty = PropertyDeclaration(ParseTypeName(collectionType), propName)
+                    .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.VirtualKeyword))
+                    .AddAccessorListAccessors(
+                        AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
+                        AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
+
+                // Initialize with new List<T>() - C# 12 style could be cleaner but staying safe
+                // Actually property initialization is tricky with Roslyn syntax inline, easiest is = new List<T>();
+                // .WithInitializer(EqualsValueClause(ObjectCreationExpression(ParseTypeName($"List<{sourceClassName}>")).AddArgumentListArguments())) 
+                // .WithSemicolonToken(Token(SyntaxKind.SemicolonToken));
+
+                properties.Add(collectionProperty);
+            }
+
 
             var classDeclaration = ClassDeclaration(className)
                 .AddModifiers(Token(SyntaxKind.PublicKeyword))
@@ -282,8 +311,9 @@ namespace DbToEntity.Core
                 {
                     // entity.HasOne(d => d.Nav).WithMany().HasForeignKey(d => d.FK).HasConstraintName("name")
                     var navPropName = fk.TargetTable.Singularize().Pascalize();
-                    var fkPropName = fk.SourceColumn.Pascalize();
-                    if (navPropName == fkPropName) navPropName += "Nav";
+                    var sourceProps = fk.SourceColumns.Select(c => c.Pascalize()).ToList();
+
+                    if (sourceProps.Contains(navPropName)) navPropName += "Nav";
 
                     var hasOne = InvocationExpression(
                         MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("HasOne")))
@@ -294,11 +324,23 @@ namespace DbToEntity.Core
                     var withMany = InvocationExpression(
                         MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasOne, IdentifierName("WithMany"))); // Unidirectional 1:N
 
+                    // HasForeignKey(d => d.Col) or HasForeignKey(d => new { d.Col1, d.Col2 })
+                    ExpressionSyntax fkLambdaExpr;
+                    if (sourceProps.Count == 1)
+                    {
+                        fkLambdaExpr = MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(sourceProps[0]));
+                    }
+                    else
+                    {
+                        var anonProps = sourceProps.Select(p => AnonymousObjectMemberDeclarator(
+                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(p))));
+                        fkLambdaExpr = AnonymousObjectCreationExpression(SeparatedList(anonProps));
+                    }
+
                     var hasForeignKey = InvocationExpression(
                         MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, withMany, IdentifierName("HasForeignKey")))
                         .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
-                             SimpleLambdaExpression(Parameter(Identifier("d")),
-                                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(fkPropName)))))));
+                             SimpleLambdaExpression(Parameter(Identifier("d")), fkLambdaExpr)))));
 
                     var hasConstraint = InvocationExpression(
                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasForeignKey, IdentifierName("HasConstraintName")))
