@@ -116,14 +116,100 @@ namespace DbToEntity.CLI
 
             Console.WriteLine($"Found {tables.Count} tables.");
 
-            // 2. Generate Code
+            // 2. Resolve Class Names (Handle Duplicates)
+            var duplicateNames = tables
+                .GroupBy(t => t.Name.Singularize().Pascalize().Replace("_", ""))
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key)
+                .ToHashSet();
+
+            foreach (var table in tables)
+            {
+                var baseName = table.Name.Singularize().Pascalize().Replace("_", "");
+                if (duplicateNames.Contains(baseName))
+                {
+                    // Collision detected: Use SalesOrder instead of Order
+                    table.ClassName = table.Schema.Pascalize() + baseName;
+                }
+                else
+                {
+                    table.ClassName = baseName;
+                }
+            }
+
+            // 2.1 Propagate Class Names to Foreign Keys
+            // Create lookup (Schema.Table -> ClassName)
+            // Note: Postgres is case sensitive for values usually, but our names might be. 
+            // We use simple matching assuming standard lowercase/exact match from metadata.
+            var tableNameToClass = tables.ToDictionary(t => $"{t.Schema}.{t.Name}", t => t);
+
+            foreach (var table in tables)
+            {
+                foreach (var fk in table.ForeignKeys)
+                {
+                    var key = $"{fk.TargetSchema}.{fk.TargetTable}";
+                    if (tableNameToClass.TryGetValue(key, out var targetTable))
+                    {
+                        fk.TargetClassName = targetTable.ClassName;
+                        fk.TargetClassNamePlural = targetTable.ClassName.Pluralize();
+                    }
+                    else
+                    {
+                        // Fallback if target not in generated set (should fit filtering logic, but safety first)
+                        fk.TargetClassName = fk.TargetTable.Singularize().Pascalize();
+                        fk.TargetClassNamePlural = fk.TargetClassName.Pluralize();
+                    }
+                }
+
+                foreach (var fk in table.ReferencingForeignKeys)
+                {
+                    // Find the source table (the one that has this FK) to get its resolved ClassName
+                    // Note: SourceTable name in FK metadata is raw table name.
+                    // We must find the table in our generated list that matches schema/table.
+                    // BUT: ForeignKeyMetadata does not have SourceSchema! It only has SourceTable.
+                    // This is a flaw in previous implementation of MetadataProvider.
+                    // However, we can assume unique table names globally OR try to strict match if we had schema.
+                    // Since we don't have SourceSchema, we have to rely on SourceTable name.
+                    // If multiple schemas have same table name, we might pick wrong one?
+                    // YES. This is a risk.
+                    // But typically FKs are loaded from constraint info which has schema. 
+                    // Let's check MetadataProvider.LoadForeignKeysAsync...
+                    // It selects `kcu.table_name`. 
+                    // WE SHOULD HAVE ADDED SourceSchema to ForeignKeyMetadata.
+
+                    // QUICK FIX: 
+                    // Iterate all tables, find one where Name == fk.SourceTable AND it contains this FK instance (or equivalent).
+                    // Actually, ReferencingForeignKeys contains the EXACT SAME object instance as in the source table's ForeignKeys list 
+                    // IF we linked them by reference in MetadataProvider.
+                    // Let's check PostgresMetadataProvider.GetTablesAsync.
+                    // "targetTable.ReferencingForeignKeys.Add(fk);" -> It adds the same object.
+                    // So we can find the table that contains this specific object in its ForeignKeys list.
+
+                    var sourceTable = tables.FirstOrDefault(t => t.ForeignKeys.Contains(fk));
+                    if (sourceTable != null)
+                    {
+                        fk.SourceClassName = sourceTable.ClassName;
+                    }
+                    else
+                    {
+                        // Fallback: If source table is not in the generation list (e.g. partial generation),
+                        // we fall back to algorithmic naming.
+                        fk.SourceClassName = fk.SourceTable.Singularize().Pascalize();
+                    }
+                }
+            }
+
+            // For Inverse Props, we need SourceClassName in FK Metadata?
+            // Let's add SourceClassName to metadata too.
+
+            // 3. Generate Code
             IEntityGenerator generator = new RoslynEntityGenerator();
 
             Directory.CreateDirectory(config.OutputDirectory);
 
             foreach (var table in tables)
             {
-                Console.WriteLine($"Generating entity for {table.Name}...");
+                Console.WriteLine($"Generating entity for {table.Name} (Class: {table.ClassName})...");
 
                 var targetDirectory = config.OutputDirectory;
                 var targetNamespace = config.Namespace;
@@ -166,10 +252,32 @@ namespace DbToEntity.CLI
             IEntityGenerator generator = new RoslynEntityGenerator();
             Directory.CreateDirectory(config.OutputDirectory);
 
-            // 2. Regenerate Entities
+            // 2. Resolve Class Names (Handle Duplicates for Updated Tables - this logic is partial but safe enough for updates if context is clean)
+            // Ideally should check ALL tables to know global duplicates, but for MVP we assume local or re-fetch all names if critical.
+            // For now, let's keep it simple: We re-calculate based on fetched set.
+            var duplicateNames = tables
+                .GroupBy(t => t.Name.Singularize().Pascalize())
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key)
+                .ToHashSet();
+
             foreach (var table in tables)
             {
-                Console.WriteLine($"Updating entity for {table.Name}...");
+                var baseName = table.Name.Singularize().Pascalize();
+                if (duplicateNames.Contains(baseName))
+                {
+                    table.ClassName = table.Schema.Pascalize() + baseName;
+                }
+                else
+                {
+                    table.ClassName = baseName;
+                }
+            }
+
+            // 3. Regenerate Entities
+            foreach (var table in tables)
+            {
+                Console.WriteLine($"Updating entity for {table.Name} (Class: {table.ClassName})...");
 
                 var targetDirectory = config.OutputDirectory;
                 var targetNamespace = config.Namespace;

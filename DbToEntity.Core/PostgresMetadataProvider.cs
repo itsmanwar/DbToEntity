@@ -21,13 +21,13 @@ namespace DbToEntity.Core
             // BUT we must exclude child partitions. 
             // In PG, child partitions have pg_inherits entries.
             var tableQuery = @"
-                SELECT c.oid, c.relname, c.relkind
+                SELECT c.oid, c.relname, c.relkind, n.nspname
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE (@schema IS NULL OR n.nspname = @schema)
                 AND (@schema IS NOT NULL OR (n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'))
                 AND c.relkind IN ('r', 'p')
-                AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid) -- Exclude child partitions
+                AND NOT EXISTS (SELECT 1 FROM pg_inherits i JOIN pg_class p ON i.inhparent = p.oid WHERE i.inhrelid = c.oid AND p.relkind = 'p') -- Exclude declarative partitions, allow inheritance
             ";
 
             if (tableNames != null && tableNames.Any())

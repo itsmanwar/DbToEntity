@@ -6,6 +6,7 @@ namespace DbToEntity.Core.Models
     {
         public string Schema { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
+        public string ClassName { get; set; } = string.Empty; // Resolved class name to avoid collisions
         public List<ColumnMetadata> Columns { get; set; } = new();
         public List<string> PrimaryKeys { get; set; } = new();
         public string? PrimaryKeyName { get; set; }
@@ -28,9 +29,12 @@ namespace DbToEntity.Core.Models
     {
         public string ConstraintName { get; set; } = string.Empty;
         public string SourceTable { get; set; } = string.Empty;
+        public string SourceClassName { get; set; } = string.Empty; // Resolved class name of source
         public List<string> SourceColumns { get; set; } = new();
         public string TargetSchema { get; set; } = string.Empty;
         public string TargetTable { get; set; } = string.Empty;
+        public string TargetClassName { get; set; } = string.Empty; // Resolved class name
+        public string TargetClassNamePlural { get; set; } = string.Empty; // Resolved plural name
         public List<string> TargetColumns { get; set; } = new();
     }
 
