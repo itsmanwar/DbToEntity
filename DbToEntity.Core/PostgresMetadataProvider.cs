@@ -39,14 +39,14 @@ namespace DbToEntity.Core
 
             using (var cmd = new NpgsqlCommand(tableQuery, conn))
             {
-                cmd.Parameters.AddWithValue("schema", schema);
+                cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = schema ?? (object)DBNull.Value });
                 using (var reader = await cmd.ExecuteReaderAsync())
                 {
                     while (await reader.ReadAsync())
                     {
                         tables.Add(new TableMetadata
                         {
-                            Schema = schema,
+                            Schema = reader.GetString(3),
                             Name = reader.GetString(1),
                             IsPartitioned = reader.GetChar(2) == 'p'
                         });
@@ -61,6 +61,7 @@ namespace DbToEntity.Core
                 await LoadColumnsAsync(conn, table);
                 await LoadPrimaryKeysAsync(conn, table);
                 await LoadForeignKeysAsync(conn, table);
+                await LoadIndexesAsync(conn, table);
             }
 
             // 3. Post-processing: Filter Foreign Keys and Populate Inverse
@@ -89,12 +90,12 @@ namespace DbToEntity.Core
             var query = @"
                 SELECT column_name, udt_name, is_nullable, character_maximum_length, column_default
                 FROM information_schema.columns
-                WHERE table_schema = @schema AND table_name = @table
+                WHERE (@schema IS NULL OR table_schema = @schema) AND table_name = @table
                 ORDER BY ordinal_position
             ";
 
             using var cmd = new NpgsqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("schema", table.Schema);
+            cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = table.Schema ?? (object)DBNull.Value });
             cmd.Parameters.AddWithValue("table", table.Name);
 
             using var reader = await cmd.ExecuteReaderAsync();
@@ -120,13 +121,13 @@ namespace DbToEntity.Core
                   ON kcu.constraint_name = tc.constraint_name
                   AND kcu.table_schema = tc.table_schema
                 WHERE tc.constraint_type = 'PRIMARY KEY'
-                  AND tc.table_schema = @schema
+                  AND (@schema IS NULL OR tc.table_schema = @schema)
                   AND tc.table_name = @table
                 ORDER BY kcu.ordinal_position
             ";
 
             using var cmd = new NpgsqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("schema", table.Schema);
+            cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = table.Schema ?? (object)DBNull.Value });
             cmd.Parameters.AddWithValue("table", table.Name);
 
             using var reader = await cmd.ExecuteReaderAsync();
@@ -142,30 +143,30 @@ namespace DbToEntity.Core
         {
             var query = @"
                 SELECT
-                    con.conname,
-                    c.relname AS source_table,
-                    (SELECT array_to_string(array_agg(a.attname ORDER BY array_position(con.conkey, a.attnum)), ',')
-                     FROM pg_attribute a
-                     WHERE a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
-                    ) AS source_columns,
-                    tn.nspname AS target_schema,
-                    t.relname AS target_table,
-                    (SELECT array_to_string(array_agg(a.attname ORDER BY array_position(con.confkey, a.attnum)), ',')
-                     FROM pg_attribute a
-                     WHERE a.attrelid = con.confrelid AND a.attnum = ANY(con.confkey)
-                    ) AS target_columns
-                FROM pg_constraint con
-                JOIN pg_class c ON c.oid = con.conrelid
-                JOIN pg_namespace n ON n.oid = con.connamespace
-                JOIN pg_class t ON t.oid = con.confrelid
-                JOIN pg_namespace tn ON tn.oid = t.relnamespace
-                WHERE con.contype = 'f'
-                  AND (@schema IS NULL OR n.nspname = @schema)
-                  AND c.relname = @table
+                      con.conname,
+                      c.relname AS source_table,
+                      (SELECT array_to_string(array_agg(a.attname ORDER BY array_position(con.conkey, a.attnum)), ',')
+                       FROM pg_attribute a
+                       WHERE a.attrelid = con.conrelid AND a.attnum = ANY(con.conkey)
+                      ) AS source_columns,
+                      tn.nspname AS target_schema,
+                      t.relname AS target_table,
+                      (SELECT array_to_string(array_agg(a.attname ORDER BY array_position(con.confkey, a.attnum)), ',')
+                       FROM pg_attribute a
+                       WHERE a.attrelid = con.confrelid AND a.attnum = ANY(con.confkey)
+                      ) AS target_columns
+                  FROM pg_constraint con
+                  JOIN pg_class c ON c.oid = con.conrelid
+                  JOIN pg_namespace n ON n.oid = con.connamespace
+                  JOIN pg_class t ON t.oid = con.confrelid
+                  JOIN pg_namespace tn ON tn.oid = t.relnamespace
+                  WHERE con.contype = 'f'
+                    AND (@schema IS NULL OR n.nspname = @schema)
+                    AND c.relname = @table
             ";
 
             using var cmd = new NpgsqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("schema", table.Schema);
+            cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = table.Schema ?? (object)DBNull.Value });
             cmd.Parameters.AddWithValue("table", table.Name);
 
             using var reader = await cmd.ExecuteReaderAsync();
@@ -179,6 +180,47 @@ namespace DbToEntity.Core
                     TargetSchema = reader.GetString(3),
                     TargetTable = reader.GetString(4),
                     TargetColumns = reader.GetString(5).Split(',').ToList()
+                });
+            }
+        }
+
+
+        private async Task LoadIndexesAsync(NpgsqlConnection conn, TableMetadata table)
+        {
+            var query = @"
+                SELECT
+                    i.relname as index_name,
+                    ix.indisunique as is_unique,
+                    array_to_string(array_agg(a.attname), ',') as column_names
+                FROM pg_class t
+                JOIN pg_index ix ON t.oid = ix.indrelid
+                JOIN pg_class i ON i.oid = ix.indexrelid
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                WHERE t.relkind = 'r'
+                  AND (@schema IS NULL OR n.nspname = @schema)
+                  AND t.relname = @table
+                  AND ix.indisprimary = false -- Exclude Primary Keys as they are handled separately
+                GROUP BY i.relname, ix.indisunique
+                ORDER BY i.relname
+            ";
+
+            using var cmd = new NpgsqlCommand(query, conn);
+            cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = table.Schema ?? (object)DBNull.Value });
+            cmd.Parameters.AddWithValue("table", table.Name);
+
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var indexName = reader.GetString(0);
+                var isUnique = reader.GetBoolean(1);
+                var columns = reader.GetString(2).Split(',').ToList();
+
+                table.Indexes.Add(new IndexMetadata
+                {
+                    Name = indexName,
+                    IsUnique = isUnique,
+                    Columns = columns
                 });
             }
         }

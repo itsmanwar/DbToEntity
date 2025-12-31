@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using Microsoft.Extensions.Configuration;
 using System.Linq;
 
+using Humanizer;
+
 namespace DbToEntity.CLI
 {
     class Program
@@ -19,8 +21,7 @@ namespace DbToEntity.CLI
 
             var connectionOption = new Option<string>("--connection", "PostgreSQL connection string");
 
-            var schemaOption = new Option<string>("--schema", "Database schema");
-            schemaOption.SetDefaultValue("public");
+            var schemaOption = new Option<string>("--schema", "Database schema (optional)");
 
             var namespaceOption = new Option<string>("--namespace", "Namespace for generated code");
             namespaceOption.SetDefaultValue("GeneratedEntities");
@@ -30,13 +31,16 @@ namespace DbToEntity.CLI
 
             var tableOption = new Option<string[]>("--tables", "Specific tables to generate (space separated)") { AllowMultipleArgumentsPerToken = true };
 
+            var separateBySchemaOption = new Option<bool>("--separate-by-schema", "Organize entities into folders by schema");
+
             generateCommand.AddOption(connectionOption);
             generateCommand.AddOption(schemaOption);
             generateCommand.AddOption(namespaceOption);
             generateCommand.AddOption(outputOption);
             generateCommand.AddOption(tableOption);
+            generateCommand.AddOption(separateBySchemaOption);
 
-            generateCommand.SetHandler(async (connection, schema, namespaceName, output, tables) =>
+            generateCommand.SetHandler(async (connection, schema, namespaceName, output, tables, separate) =>
             {
                 var finalConnection = GetConnectionString(connection);
                 if (string.IsNullOrEmpty(finalConnection))
@@ -45,7 +49,7 @@ namespace DbToEntity.CLI
                     return;
                 }
 
-                var finalNamespace = GetNamespace(namespaceName);
+                var finalNamespace = GetNamespace(namespaceName, output);
 
                 await RunGenerate(new GeneratorConfig
                 {
@@ -53,9 +57,10 @@ namespace DbToEntity.CLI
                     Schema = schema,
                     Namespace = finalNamespace,
                     OutputDirectory = output,
-                    IncludedTables = tables != null ? new List<string>(tables) : new List<string>()
+                    IncludedTables = tables != null ? new List<string>(tables) : new List<string>(),
+                    SeparateBySchema = separate
                 });
-            }, connectionOption, schemaOption, namespaceOption, outputOption, tableOption);
+            }, connectionOption, schemaOption, namespaceOption, outputOption, tableOption, separateBySchemaOption);
 
             rootCommand.AddCommand(generateCommand);
 
@@ -66,8 +71,9 @@ namespace DbToEntity.CLI
             updateCommand.AddOption(outputOption);
             // reused options, tableOption is required for update ideally
             updateCommand.AddOption(tableOption);
+            updateCommand.AddOption(separateBySchemaOption);
 
-            updateCommand.SetHandler(async (connection, schema, namespaceName, output, tables) =>
+            updateCommand.SetHandler(async (connection, schema, namespaceName, output, tables, separate) =>
             {
                 if (tables == null || tables.Length == 0)
                 {
@@ -82,7 +88,7 @@ namespace DbToEntity.CLI
                     return;
                 }
 
-                var finalNamespace = GetNamespace(namespaceName);
+                var finalNamespace = GetNamespace(namespaceName, output);
 
                 await RunUpdate(new GeneratorConfig
                 {
@@ -90,9 +96,10 @@ namespace DbToEntity.CLI
                     Schema = schema,
                     Namespace = finalNamespace,
                     OutputDirectory = output,
-                    IncludedTables = new List<string>(tables)
+                    IncludedTables = new List<string>(tables),
+                    SeparateBySchema = separate
                 });
-            }, connectionOption, schemaOption, namespaceOption, outputOption, tableOption);
+            }, connectionOption, schemaOption, namespaceOption, outputOption, tableOption, separateBySchemaOption);
 
             rootCommand.AddCommand(updateCommand);
 
@@ -101,7 +108,7 @@ namespace DbToEntity.CLI
 
         static async Task RunGenerate(GeneratorConfig config)
         {
-            Console.WriteLine($"Starting generation for schema '{config.Schema}'...");
+            Console.WriteLine($"Starting generation for schema '{config.Schema ?? "all"}'...");
 
             // 1. Get Metadata
             IPostgresMetadataProvider metadataProvider = new PostgresMetadataProvider();
@@ -117,14 +124,26 @@ namespace DbToEntity.CLI
             foreach (var table in tables)
             {
                 Console.WriteLine($"Generating entity for {table.Name}...");
-                var file = generator.GenerateEntity(table, config.Namespace);
-                var path = Path.Combine(config.OutputDirectory, file.FileName);
+
+                var targetDirectory = config.OutputDirectory;
+                var targetNamespace = config.Namespace;
+
+                if (config.SeparateBySchema && !string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
+                {
+                    var schemaFolder = table.Schema.Pascalize();
+                    targetDirectory = Path.Combine(config.OutputDirectory, schemaFolder);
+                    targetNamespace = $"{config.Namespace}.{schemaFolder}";
+                    Directory.CreateDirectory(targetDirectory);
+                }
+
+                var file = generator.GenerateEntity(table, targetNamespace);
+                var path = Path.Combine(targetDirectory, file.FileName);
                 await File.WriteAllTextAsync(path, file.Content);
             }
 
             // For Generate, we overwrite DbContext
             Console.WriteLine("Generating DbContext...");
-            var dbContextFile = generator.GenerateDbContext(tables, config.Namespace, config.DbContextName);
+            var dbContextFile = generator.GenerateDbContext(tables, config.Namespace, config.DbContextName, config.SeparateBySchema); // Pass flag
             await File.WriteAllTextAsync(Path.Combine(config.OutputDirectory, dbContextFile.FileName), dbContextFile.Content);
 
             Console.WriteLine("Generation complete.");
@@ -151,8 +170,20 @@ namespace DbToEntity.CLI
             foreach (var table in tables)
             {
                 Console.WriteLine($"Updating entity for {table.Name}...");
-                var file = generator.GenerateEntity(table, config.Namespace);
-                var path = Path.Combine(config.OutputDirectory, file.FileName);
+
+                var targetDirectory = config.OutputDirectory;
+                var targetNamespace = config.Namespace;
+
+                if (config.SeparateBySchema && !string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
+                {
+                    var schemaFolder = table.Schema.Pascalize();
+                    targetDirectory = Path.Combine(config.OutputDirectory, schemaFolder);
+                    targetNamespace = $"{config.Namespace}.{schemaFolder}";
+                    Directory.CreateDirectory(targetDirectory);
+                }
+
+                var file = generator.GenerateEntity(table, targetNamespace);
+                var path = Path.Combine(targetDirectory, file.FileName);
                 await File.WriteAllTextAsync(path, file.Content);
             }
 
@@ -217,18 +248,49 @@ namespace DbToEntity.CLI
             return conn;
         }
 
-        static string GetNamespace(string providedNamespace)
+        static string GetNamespace(string providedNamespace, string outputDirectory)
         {
             if (!string.IsNullOrEmpty(providedNamespace) && providedNamespace != "GeneratedEntities")
                 return providedNamespace;
 
             // Try to detect csproj
-            var csproj = Directory.GetFiles(Directory.GetCurrentDirectory(), "*.csproj").FirstOrDefault();
+            var currentDir = Directory.GetCurrentDirectory();
+            var csproj = Directory.GetFiles(currentDir, "*.csproj").FirstOrDefault();
             if (csproj != null)
             {
-                var ns = Path.GetFileNameWithoutExtension(csproj);
-                Console.WriteLine($"Detected namespace from project: {ns}");
-                return ns;
+                var baseNs = Path.GetFileNameWithoutExtension(csproj);
+
+                // Calculate folder suffix if output directory is provided
+                if (!string.IsNullOrEmpty(outputDirectory))
+                {
+                    try
+                    {
+                        var fullOutputDir = Path.GetFullPath(outputDirectory);
+                        // Only add suffix if output dir is a subdirectory of current dir
+                        if (fullOutputDir.StartsWith(currentDir, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var relativePath = Path.GetRelativePath(currentDir, fullOutputDir);
+                            if (relativePath != "." && !relativePath.StartsWith(".."))
+                            {
+                                var suffix = relativePath
+                                    .Replace(Path.DirectorySeparatorChar, '.')
+                                    .Replace(Path.AltDirectorySeparatorChar, '.')
+                                    .Trim('.');
+                                if (!string.IsNullOrEmpty(suffix))
+                                {
+                                    baseNs = $"{baseNs}.{suffix}";
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore path errors, stick to base namespace
+                    }
+                }
+
+                Console.WriteLine($"Detected namespace from project: {baseNs}");
+                return baseNs;
             }
 
             return providedNamespace; // Return default if not found

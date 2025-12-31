@@ -32,8 +32,41 @@ namespace DbToEntity.Core
                     LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.Schema))));
             }
 
-            var tableAttribute = AttributeList(SingletonSeparatedList(
-                Attribute(IdentifierName("Table"), ToAttributeArgumentList(tableAttributeArgs.ToArray()))));
+            var classAttributes = new List<AttributeListSyntax>
+            {
+                AttributeList(SingletonSeparatedList(
+                    Attribute(IdentifierName("Table"), ToAttributeArgumentList(tableAttributeArgs.ToArray()))))
+            };
+
+            // [Index("Col1", "Col2", Name = "IndexName", IsUnique = true)]
+            foreach (var index in table.Indexes)
+            {
+                var indexArgs = new List<AttributeArgumentSyntax>();
+
+                // Columns
+                foreach (var col in index.Columns)
+                {
+                    indexArgs.Add(AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.Pascalize()))));
+                }
+
+                // Name
+                indexArgs.Add(AttributeArgument(
+                    NameEquals(IdentifierName("Name")),
+                    null,
+                    LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(index.Name))));
+
+                // IsUnique
+                if (index.IsUnique)
+                {
+                    indexArgs.Add(AttributeArgument(
+                        NameEquals(IdentifierName("IsUnique")),
+                        null,
+                        LiteralExpression(SyntaxKind.TrueLiteralExpression)));
+                }
+
+                classAttributes.Add(AttributeList(SingletonSeparatedList(
+                    Attribute(IdentifierName("Index"), ToAttributeArgumentList(indexArgs.ToArray())))));
+            }
 
             foreach (var col in table.Columns)
             {
@@ -138,8 +171,8 @@ namespace DbToEntity.Core
 
 
             var classDeclaration = ClassDeclaration(className)
-                .AddModifiers(Token(SyntaxKind.PublicKeyword))
-                .AddAttributeLists(tableAttribute)
+                .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.PartialKeyword))
+                .AddAttributeLists(classAttributes.ToArray())
                 .AddMembers(properties.ToArray());
 
             var namespaceDeclaration = NamespaceDeclaration(ParseName(namespaceName))
@@ -149,7 +182,8 @@ namespace DbToEntity.Core
                 .AddUsings(
                     UsingDirective(ParseName("System")),
                     UsingDirective(ParseName("System.ComponentModel.DataAnnotations")),
-                    UsingDirective(ParseName("System.ComponentModel.DataAnnotations.Schema")))
+                    UsingDirective(ParseName("System.ComponentModel.DataAnnotations.Schema")),
+                    UsingDirective(ParseName("Microsoft.EntityFrameworkCore")))
                 .AddMembers(namespaceDeclaration)
                 .NormalizeWhitespace();
 
@@ -165,7 +199,7 @@ namespace DbToEntity.Core
             return AttributeArgumentList(SeparatedList(args));
         }
 
-        public GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName)
+        public GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName, bool separateBySchema = false)
         {
             var dbSets = new List<MemberDeclarationSyntax>();
 
@@ -371,10 +405,30 @@ namespace DbToEntity.Core
             var namespaceDeclaration = NamespaceDeclaration(ParseName(namespaceName))
                 .AddMembers(classDeclaration);
 
+            var usings = new List<UsingDirectiveSyntax>
+            {
+                UsingDirective(ParseName("System")),
+                UsingDirective(ParseName("System.ComponentModel.DataAnnotations")),
+                UsingDirective(ParseName("System.ComponentModel.DataAnnotations.Schema")),
+                UsingDirective(ParseName("Microsoft.EntityFrameworkCore"))
+            };
+
+            if (separateBySchema)
+            {
+                var schemas = tables
+                    .Select(t => t.Schema)
+                    .Where(s => !string.IsNullOrEmpty(s) && s != "public")
+                    .Distinct()
+                    .OrderBy(s => s);
+
+                foreach (var schema in schemas)
+                {
+                    usings.Add(UsingDirective(ParseName($"{namespaceName}.{schema.Pascalize()}")));
+                }
+            }
+
             var cu = CompilationUnit()
-                .AddUsings(
-                    UsingDirective(ParseName("System")),
-                    UsingDirective(ParseName("Microsoft.EntityFrameworkCore")))
+                .AddUsings(usings.ToArray())
                 .AddMembers(namespaceDeclaration)
                 .NormalizeWhitespace();
 

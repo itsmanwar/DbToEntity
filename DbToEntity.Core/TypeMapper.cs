@@ -12,11 +12,11 @@ namespace DbToEntity.Core
                 "bigint" or "int8" => "long",
                 "smallint" or "int2" => "short",
                 "boolean" or "bool" => "bool",
-                "text" or "varchar" or "character varying" or "char" or "character" => "string",
+                "text" or "varchar" or "character varying" or "char" or "character" or "bpchar" => "string",
                 "numeric" or "decimal" or "money" => "decimal",
                 "real" or "float4" => "float",
                 "double precision" or "float8" => "double",
-                "date" => "DateTime", // Use DateOnly in .NET 6+ if preferred, but DateTime is safer for EF Core compat
+                "date" => "DateOnly",
                 "timestamp" or "timestamp without time zone" => "DateTime",
                 "timestamptz" or "timestamp with time zone" => "DateTime",
                 "uuid" => "Guid",

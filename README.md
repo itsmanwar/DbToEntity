@@ -64,9 +64,10 @@ db2entity generate --connection "Host=localhost;Database=mydb;..." --schema "pub
 
 **Options:**
 -   `--connection`: (Optional) PostgreSQL connection string. Defaults to `appsettings.json`.
--   `--schema`: (Optional) Schema to target (default: `public`).
+-   `--schema`: (Optional) Schema to target (default: all schemas).
 -   `--output`: (Optional) Output directory (default: `./Entities`).
 -   `--namespace`: (Optional) Namespace (default: detected from `.csproj`).
+-   `--separate-by-schema`: (Optional) Organize into subfolders by schema (default: false).
 -   `--tables`: (Optional) Generate only specific tables (space separated).
 
 ### 2. Update Specific Tables (Incremental)
@@ -100,6 +101,13 @@ protected override void OnModelCreating(ModelBuilder modelBuilder)
     });
 }
 ```
+
+### Schema-based Folder Organization (v1.1.7+)
+Use `--separate-by-schema` to organize entities into subfolders based on their database schema:
+-   `public.users` -> `./Entities/User.cs` (Namespace: `MyApp.Domain`)
+-   `logs.audit_trail` -> `./Entities/Logs/AuditTrail.cs` (Namespace: `MyApp.Domain.Logs`)
+
+This keeps your project clean when dealing with large databases.
 
 ### Intelligent Naming
 Uses `Humanizer` to ensure C# conventions:

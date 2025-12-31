@@ -10,5 +10,6 @@ namespace DbToEntity.Core
         public string DbContextName { get; set; } = "AppDbContext";
         public string OutputDirectory { get; set; } = "./Output";
         public List<string> IncludedTables { get; set; } = new();
+        public bool SeparateBySchema { get; set; }
     }
 }

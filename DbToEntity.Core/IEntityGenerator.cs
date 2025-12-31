@@ -12,7 +12,7 @@ namespace DbToEntity.Core
     public interface IEntityGenerator
     {
         GeneratedFile GenerateEntity(TableMetadata table, string namespaceName);
-        GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName);
+        GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName, bool separateBySchema = false);
         GeneratedFile UpdateDbContext(string existingCode, List<TableMetadata> tables, string dbContextName);
     }
 }
