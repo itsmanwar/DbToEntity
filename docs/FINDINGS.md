@@ -110,6 +110,7 @@ Status legend: ✅ fixed · 🔲 open
 ## 3. Upkeep and technical debt
 - ✅ **Tests:** `DbToEntity.Tests` (142 tests) covers name resolution, generate → compile → EF model, and **integration tests against a real PostgreSQL 17** (Testcontainers): every metadata query, plus real writes and reads through the generated `DbContext`. They also prove the `timestamp`/`jsonb` column-type fixes (removing them makes writes fail with Npgsql's real errors). Integration tests are skipped when Docker isn't running. Not covered: the CLI's file I/O (exercised manually).
 - **N+1 queries:** 4 round-trips per table. Load each kind of metadata in one query for all tables.
+- ✅ CI and release workflows added (`ci.yml`, `release.yml` with NuGet Trusted Publishing); see `docs/RELEASING.md`.
 - `System.CommandLine 2.0.0-beta4` is an old preview. The stable 2.x API is different.
 - ✅ Naming and folder-layout logic moved from `Program.cs` to Core (`ModelPipeline`, `IncrementalUpdate`). The CLI is now mostly I/O.
 - Leftover code: unused `ToPascalCase`. ✅ ~~versions don't match (Core 1.0.6 vs CLI 1.2.9), Core `<Authors>` set to `DbToEntity`~~: both are 2.0.0 now, with the same author.
