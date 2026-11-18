@@ -140,6 +140,7 @@ namespace DbToEntity.Core
                     }
 
                     column.ClrType = column.IsNullable && mapping.IsValueType ? mapping.ClrType + "?" : mapping.ClrType;
+                    column.IsValueType = mapping.IsValueType;
                     column.ColumnType = mapping.ColumnType;
                 }
 

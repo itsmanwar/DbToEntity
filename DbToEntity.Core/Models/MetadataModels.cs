@@ -38,7 +38,8 @@ namespace DbToEntity.Core.Models
         public string? Comment { get; set; } // COMMENT ON COLUMN
 
         // Set by TypeMapper.ResolveColumnTypes
-        public string ClrType { get; set; } = string.Empty; // e.g. "int?", "string", "Mood[]"
+        public string ClrType { get; set; } = string.Empty; // e.g. "int?", "string", "Mood[]" (reference types never carry "?")
+        public bool IsValueType { get; set; } // false: a nullable column is emitted as "T?" under #nullable enable
         public string? ColumnType { get; set; } // explicit HasColumnType value when Npgsql's default store type would differ
     }
 

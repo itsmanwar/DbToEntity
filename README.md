@@ -149,6 +149,17 @@ Uses `Humanizer` to ensure C# conventions:
 -   **Connection strings passed with `--connection` are never saved** (they usually contain a password). Use `connectionStringName`, or add `"connection"` to the file yourself.
 -   EF Core's `__EFMigrationsHistory` table is always excluded. Tables named in `--tables` are generated even if an exclude pattern matches them.
 
+### Nullable Reference Types
+Generated files use `#nullable enable` and follow the database, so callers see accurate nullability whatever your project's `<Nullable>` setting (no warnings either way):
+
+```csharp
+public string Email { get; set; } = null!;          // NOT NULL
+public string? Nickname { get; set; }               // nullable
+public virtual Role Role { get; set; } = null!;     // required foreign key
+public virtual User? Manager { get; set; }          // optional foreign key
+public virtual ICollection<Order> Orders { get; set; } = new List<Order>();
+```
+
 ### Database Comments
 `COMMENT ON TABLE` / `COMMENT ON COLUMN` text becomes XML doc comments (`/// <summary>`) on the generated classes and properties, plus `HasComment(...)` in the fluent configuration, so IntelliSense shows your schema documentation.
 

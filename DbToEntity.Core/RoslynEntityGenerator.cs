@@ -114,7 +114,8 @@ namespace DbToEntity.Core
                             AttributeArgument(LiteralExpression(SyntaxKind.NumericLiteralExpression, Literal(col.MaxLength.Value)))))));
                 }
 
-                var property = PropertyDeclaration(ParseTypeName(typeName), propName)
+                var nullableReference = col.IsNullable && !col.IsValueType;
+                var property = PropertyDeclaration(ParseTypeName(nullableReference ? typeName + "?" : typeName), propName)
                     .AddModifiers(Token(SyntaxKind.PublicKeyword));
 
                 if (attributes.Any() && !_fluentOnly)
@@ -125,6 +126,11 @@ namespace DbToEntity.Core
                 property = property.AddAccessorListAccessors(
                     AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
                     AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
+
+                if (!col.IsValueType && !col.IsNullable)
+                {
+                    property = WithInitializer(property, NullForgiving()); // required: EF sets it when loading
+                }
 
                 properties.Add(WithDocComment(property, col.Comment));
             }
@@ -149,12 +155,18 @@ namespace DbToEntity.Core
                             AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(fk.InverseNavigationName)))))));
                 }
 
-                var navProperty = PropertyDeclaration(ParseTypeName(fk.TargetClassName), RequireName(fk.NavigationName, fk))
+                // Same rule EF uses for requiredness: the relationship is optional if any FK column is nullable.
+                var optional = fk.SourceColumns.Any(c => table.Columns.FirstOrDefault(col => col.Name == c)?.IsNullable ?? true);
+                var navProperty = PropertyDeclaration(ParseTypeName(optional ? fk.TargetClassName + "?" : fk.TargetClassName), RequireName(fk.NavigationName, fk))
                     .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.VirtualKeyword))
                     .AddAttributeLists(_fluentOnly ? Array.Empty<AttributeListSyntax>() : new[] { AttributeList(SeparatedList(attributes)) })
                     .AddAccessorListAccessors(
                         AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
                         AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
+                if (!optional)
+                {
+                    navProperty = WithInitializer(navProperty, NullForgiving());
+                }
 
                 properties.Add(navProperty);
             }
@@ -162,7 +174,8 @@ namespace DbToEntity.Core
             // Inverse navigation properties: a collection, or a single reference for one-to-one
             foreach (var fk in table.ReferencingForeignKeys)
             {
-                var inverseType = fk.IsOneToOne ? fk.SourceClassName : $"ICollection<{fk.SourceClassName}>";
+                // One-to-one inverse is nullable: a principal may have no dependent.
+                var inverseType = fk.IsOneToOne ? fk.SourceClassName + "?" : $"ICollection<{fk.SourceClassName}>";
                 var inverseAttribute = AttributeList(SingletonSeparatedList(
                     Attribute(IdentifierName("InverseProperty"),
                         AttributeArgumentList(SingletonSeparatedList(
@@ -173,6 +186,12 @@ namespace DbToEntity.Core
                     .AddAccessorListAccessors(
                         AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
                         AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
+
+                if (!fk.IsOneToOne)
+                {
+                    collectionProperty = WithInitializer(collectionProperty,
+                        ObjectCreationExpression(ParseTypeName($"List<{fk.SourceClassName}>")).WithArgumentList(ArgumentList()));
+                }
 
                 properties.Add(collectionProperty);
             }
@@ -201,7 +220,7 @@ namespace DbToEntity.Core
                     UsingDirective(ParseName("System.ComponentModel.DataAnnotations.Schema")),
                     UsingDirective(ParseName("Microsoft.EntityFrameworkCore")))
                 .AddMembers(namespaceDeclaration)
-                .NormalizeWhitespace()
+                .NormalizeWhitespace().TightenNullForgiving()
                 .WithLeadingTrivia(GeneratedHeader);
 
             return new GeneratedFile
@@ -231,7 +250,7 @@ namespace DbToEntity.Core
             var cu = CompilationUnit()
                 .AddUsings(UsingDirective(ParseName("NpgsqlTypes")))
                 .AddMembers(NamespaceDeclaration(ParseName(namespaceName)).AddMembers(enumDeclaration))
-                .NormalizeWhitespace()
+                .NormalizeWhitespace().TightenNullForgiving()
                 .WithLeadingTrivia(GeneratedHeader);
 
             return new GeneratedFile { FileName = $"{enumType.ClassName}.cs", Content = cu.ToFullString() };
@@ -338,7 +357,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
             var cu = CompilationUnit()
                 .AddUsings(usings.ToArray())
                 .AddMembers(namespaceDeclaration)
-                .NormalizeWhitespace()
+                .NormalizeWhitespace().TightenNullForgiving()
                 .WithLeadingTrivia(GeneratedHeader);
 
             return new GeneratedFile
@@ -350,11 +369,21 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
 
         /// <summary>The DbSet property for a table: <c>public DbSet&lt;User&gt; Users { get; set; }</c>.</summary>
         private static PropertyDeclarationSyntax CreateDbSet(TableMetadata table) =>
-            PropertyDeclaration(ParseTypeName($"DbSet<{table.ClassName}>"), string.IsNullOrEmpty(table.DbSetName) ? table.ClassName.Pluralize() : table.DbSetName)
-                .AddModifiers(Token(SyntaxKind.PublicKeyword))
-                .AddAccessorListAccessors(
-                    AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
-                    AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
+            WithInitializer( // DbContext initializes DbSet properties
+                PropertyDeclaration(ParseTypeName($"DbSet<{table.ClassName}>"), string.IsNullOrEmpty(table.DbSetName) ? table.ClassName.Pluralize() : table.DbSetName)
+                    .AddModifiers(Token(SyntaxKind.PublicKeyword))
+                    .AddAccessorListAccessors(
+                        AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
+                        AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken))),
+                NullForgiving());
+
+        // `null!`
+        private static ExpressionSyntax NullForgiving() =>
+            PostfixUnaryExpression(SyntaxKind.SuppressNullableWarningExpression, LiteralExpression(SyntaxKind.NullLiteralExpression));
+
+        // `{ get; set; } = value;`
+        private static PropertyDeclarationSyntax WithInitializer(PropertyDeclarationSyntax property, ExpressionSyntax value) =>
+            property.WithInitializer(EqualsValueClause(value)).WithSemicolonToken(Token(SyntaxKind.SemicolonToken));
 
         // The provider puts the same FK instance in the principal's ReferencingForeignKeys.
         private static Dictionary<ForeignKeyMetadata, TableMetadata> BuildPrincipalLookup(IEnumerable<TableMetadata> tables) =>
@@ -665,7 +694,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                 .Select(ns => UsingDirective(ParseName(ns)));
             newRoot = newRoot.AddUsings(newUsings.ToArray());
 
-            var content = newRoot.NormalizeWhitespace().ToFullString();
+            var content = newRoot.NormalizeWhitespace().TightenNullForgiving().ToFullString();
             return new GeneratedFile { FileName = $"{dbContextName}.cs", Content = content };
         }
 
@@ -697,7 +726,8 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
             _ => "ClientSetNull"
         };
 
-        // <auto-generated> also makes the compiler treat the file as generated code (e.g. nullable warnings off).
+        // <auto-generated> makes the compiler treat the file as generated code; '#nullable enable' then opts the
+        // file back into nullable annotations, so callers see accurate nullability whatever the project setting.
         // CRLF to match NormalizeWhitespace's default, so a file has one line-ending style and re-normalizing it
         // (UpdateDbContext) doesn't change it.
         private static readonly SyntaxTriviaList GeneratedHeader = ParseLeadingTrivia(
@@ -705,7 +735,8 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
             "//     Generated by db2entity. Changes to this file are lost when the code is regenerated.\r\n" +
             "//     Put customizations in a separate file: partial classes for entities, and\r\n" +
             "//     'partial void OnModelCreatingPartial(ModelBuilder modelBuilder)' for the DbContext.\r\n" +
-            "// </auto-generated>\r\n");
+            "// </auto-generated>\r\n" +
+            "#nullable enable\r\n");
 
         // `/// <summary>` from a database comment (XML-escaped, multi-line aware). CRLF like the rest of the output.
         private static T WithDocComment<T>(T node, string? comment) where T : SyntaxNode
