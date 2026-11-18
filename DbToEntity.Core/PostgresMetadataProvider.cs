@@ -240,17 +240,19 @@ namespace DbToEntity.Core
                 SELECT
                     i.relname as index_name,
                     ix.indisunique as is_unique,
-                    array_to_string(array_agg(a.attname), ',') as column_names
+                    array_to_string(array_agg(a.attname ORDER BY array_position(ix.indkey::int2[], a.attnum)), ',') as column_names,
+                    ix.indpred IS NOT NULL as is_partial,
+                    ix.indexprs IS NOT NULL as has_expressions
                 FROM pg_class t
                 JOIN pg_index ix ON t.oid = ix.indrelid
                 JOIN pg_class i ON i.oid = ix.indexrelid
                 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
                 JOIN pg_namespace n ON n.oid = t.relnamespace
-                WHERE t.relkind = 'r'
+                WHERE t.relkind IN ('r', 'p', 'm') -- ordinary, partitioned, materialized view
                   AND (@schema IS NULL OR n.nspname = @schema)
                   AND t.relname = @table
                   AND ix.indisprimary = false -- Exclude Primary Keys as they are handled separately
-                GROUP BY i.relname, ix.indisunique
+                GROUP BY i.relname, ix.indisunique, ix.indpred IS NOT NULL, ix.indexprs IS NOT NULL
                 ORDER BY i.relname
             ";
 
@@ -269,7 +271,9 @@ namespace DbToEntity.Core
                 {
                     Name = indexName,
                     IsUnique = isUnique,
-                    Columns = columns
+                    Columns = columns,
+                    IsPartial = reader.GetBoolean(3),
+                    HasExpressions = reader.GetBoolean(4)
                 });
             }
         }

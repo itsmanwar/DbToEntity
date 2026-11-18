@@ -145,10 +145,11 @@ namespace DbToEntity.Core
                 properties.Add(navProperty);
             }
 
-            // Inverse navigation properties (collections)
+            // Inverse navigation properties: a collection, or a single reference for one-to-one
             foreach (var fk in table.ReferencingForeignKeys)
             {
-                var collectionProperty = PropertyDeclaration(ParseTypeName($"ICollection<{fk.SourceClassName}>"), RequireName(fk.InverseNavigationName, fk))
+                var inverseType = fk.IsOneToOne ? fk.SourceClassName : $"ICollection<{fk.SourceClassName}>";
+                var collectionProperty = PropertyDeclaration(ParseTypeName(inverseType), RequireName(fk.InverseNavigationName, fk))
                     .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.VirtualKeyword))
                     .AddAttributeLists(AttributeList(SingletonSeparatedList(
                         Attribute(IdentifierName("InverseProperty"),
@@ -397,8 +398,8 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                              SimpleLambdaExpression(Parameter(Identifier("d")),
                                 MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(navPropName)))))));
 
-                    // .WithMany(p => p.Inverse) pairs the reference with its collection; a bare
-                    // .WithMany() would leave the collection to be matched by convention as a second relationship.
+                    // .WithMany(p => p.Inverse) / .WithOne(p => p.Inverse) pairs the reference with its inverse; a bare
+                    // .WithMany() would leave the inverse to be matched by convention as a second relationship.
                     var withManyArgs = string.IsNullOrEmpty(fk.InverseNavigationName)
                         ? ArgumentList()
                         : ArgumentList(SingletonSeparatedList(Argument(
@@ -406,7 +407,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                                 MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("p"), IdentifierName(fk.InverseNavigationName))))));
 
                     var withMany = InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasOne, IdentifierName("WithMany")))
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasOne, IdentifierName(fk.IsOneToOne ? "WithOne" : "WithMany")))
                         .WithArgumentList(withManyArgs);
 
                     ExpressionSyntax fkLambdaExpr;
@@ -421,8 +422,13 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                         fkLambdaExpr = AnonymousObjectCreationExpression(SeparatedList(anonProps));
                     }
 
-                    var hasForeignKey = InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, withMany, IdentifierName("HasForeignKey")))
+                    // For one-to-one EF can't infer which side is dependent, so HasForeignKey names it: HasForeignKey<TDependent>.
+                    SimpleNameSyntax hasForeignKeyName = fk.IsOneToOne
+                        ? GenericName(Identifier("HasForeignKey")).WithTypeArgumentList(TypeArgumentList(SingletonSeparatedList(ParseTypeName(className))))
+                        : IdentifierName("HasForeignKey");
+
+                    ExpressionSyntax hasForeignKey = InvocationExpression(
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, withMany, hasForeignKeyName))
                         .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
                              SimpleLambdaExpression(Parameter(Identifier("d")), fkLambdaExpr)))));
 

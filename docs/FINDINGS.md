@@ -33,9 +33,10 @@ Status legend: ✅ fixed · 🔲 open
 
 ### 1.4 🔲 Gaps in reading the schema
 - **Materialized views get no columns.** `information_schema.columns` doesn't list them. Read from `pg_attribute` instead (`attnum > 0 AND NOT attisdropped`).
-- **Partitioned tables get no indexes.** The index query filters on `t.relkind = 'r'`. Allow `'p'` and `'m'` too.
-- **Composite index column order isn't guaranteed.** `array_agg(a.attname)` needs `ORDER BY array_position(ix.indkey, a.attnum)`.
-- Expression indexes are silently dropped, and partial indexes are written as full indexes (no `HasFilter`).
+- ✅ ~~Partitioned tables get no indexes~~: the index query now includes `relkind` `'p'` and `'m'`. *(Not yet run against a real database.)*
+- ✅ ~~Composite index column order isn't guaranteed~~: ordered by position in `indkey`. *(Not yet run against a real database.)*
+- Expression indexes are silently dropped, and partial indexes are written as full indexes (no `HasFilter`). `IndexMetadata.IsPartial`/`HasExpressions` are now read, but only used for one-to-one detection.
+- **FKs that reference a unique non-PK column** (alternate key) get no `HasPrincipalKey(...)`, so EF assumes they point at the principal's primary key. That gives wrong mappings, or type-mismatch errors at model build.
 - **FK target matching ignores schema** (`PostgresMetadataProvider.cs:77-89`, name-only `HashSet` / `FirstOrDefault`). Two schemas with the same table name can attach FKs to the wrong table.
 
 ### 1.5 ✅ Unknown Postgres types became `object`
@@ -63,7 +64,7 @@ Status legend: ✅ fixed · 🔲 open
 |---|---------|-------|
 | F1 ✅ | **Type mapping**: enums, arrays, `time`/`interval`/`inet`/`citext` | Done: 47 built-in types + arrays. Enums become C# enums with `[PgName]` and a generated `AppDbContext.ConfigureNpgsql` helper (EF 9+ `MapEnum`). Open: `numeric(p,s)` precision, multiranges, PostGIS/NodaTime plugins, domains. `update` refreshes enum files but cannot add the helper to an existing DbContext. |
 | F2 ✅ | **Delete rules**: `OnDelete(DeleteBehavior.X)` | Done. `confdeltype` is mapped: CASCADE→Cascade, SET NULL→SetNull, RESTRICT→Restrict, NO ACTION→ClientSetNull (as EF's scaffolder does), SET DEFAULT→NoAction. Always emitted explicitly. Before this, required FKs got EF's `Cascade` convention even when the database said NO ACTION. `ON UPDATE` is ignored (EF has no equivalent). |
-| F3 | **One-to-one detection** | FK columns covered by a unique index/constraint → `HasOne().WithOne()` and a single reference instead of a collection. |
+| F3 ✅ | **One-to-one detection** | Done. FK columns that (as a set) equal the PK or a unique index that is neither partial nor has expressions → `WithOne(...).HasForeignKey<TDependent>(...)` and a singular reference inverse (`User.UserProfile`). |
 | F4 | **Generated / identity columns** | `attgenerated = 's'` → `HasComputedColumnSql(..., stored: true)`. `attidentity` → `UseIdentityAlwaysColumn()` / `UseIdentityByDefaultColumn()`. |
 
 ### Usability (needed for routine use on real projects)
@@ -85,7 +86,7 @@ Status legend: ✅ fixed · 🔲 open
 ---
 
 ## 3. Upkeep and technical debt
-- ✅ **Tests added:** `DbToEntity.Tests` (32 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
+- ✅ **Tests added:** `DbToEntity.Tests` (41 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
 - **N+1 queries:** 4 round-trips per table. Load each kind of metadata in one query for all tables.
 - `System.CommandLine 2.0.0-beta4` is an old preview. The stable 2.x API is different.
 - `Program.cs` mixes command wiring with naming and folder-layout logic. That logic should live in Core so it can be tested.
@@ -96,7 +97,7 @@ Status legend: ✅ fixed · 🔲 open
 ## 4. Suggested order
 1. ✅ Navigation naming (1.1)
 2. ✅ Test project, a safety net for everything below
-3. ✅ F1 type mapping → ✅ F2 delete rules → F3 one-to-one
+3. ✅ F1 type mapping → ✅ F2 delete rules → ✅ F3 one-to-one
 4. F5 `OnModelCreatingPartial`
 5. Fix `update` (1.2), the SQL parameter (1.3), schema-reading gaps (1.4)
 6. Quick wins Q1–Q5, then F6/F7

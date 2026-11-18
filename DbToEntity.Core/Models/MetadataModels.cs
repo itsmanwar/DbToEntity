@@ -61,6 +61,7 @@ namespace DbToEntity.Core.Models
         public string NavigationName { get; set; } = string.Empty; // Reference navigation on the source entity (set by EntityNaming)
         public string InverseNavigationName { get; set; } = string.Empty; // Collection navigation on the target entity (set by EntityNaming)
         public ReferentialAction OnDelete { get; set; } = ReferentialAction.NoAction; // pg_constraint.confdeltype
+        public bool IsOneToOne { get; set; } // set by EntityNaming.ResolveNavigationNames: source columns are unique
     }
 
     /// <summary>PostgreSQL ON DELETE action. NoAction is the database default.</summary>
@@ -78,5 +79,7 @@ namespace DbToEntity.Core.Models
         public string Name { get; set; } = string.Empty;
         public List<string> Columns { get; set; } = new();
         public bool IsUnique { get; set; }
+        public bool IsPartial { get; set; } // has a WHERE predicate: uniqueness holds only for some rows
+        public bool HasExpressions { get; set; } // some key parts are expressions, which Columns does not list
     }
 }

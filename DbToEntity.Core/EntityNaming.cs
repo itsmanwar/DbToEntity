@@ -54,6 +54,7 @@ namespace DbToEntity.Core
 
                 foreach (var fk in table.ForeignKeys)
                 {
+                    fk.IsOneToOne = HasUniqueColumns(table, fk.SourceColumns);
                     var name = perTarget[fk.TargetClassName] > 1 ? FkColumnBase(fk) : fk.TargetClassName;
                     fk.NavigationName = MakeUnique(name, "Nav", used);
                 }
@@ -68,10 +69,11 @@ namespace DbToEntity.Core
 
                 foreach (var fk in table.ReferencingForeignKeys)
                 {
+                    // One-to-one: a single reference, so the name stays singular (User.UserProfile).
                     var name = perSource[fk.SourceClassName] > 1
-                        ? fk.SourceClassName + FkColumnBase(fk).Pluralize()
-                        : fk.SourceClassName.Pluralize();
-                    fk.InverseNavigationName = MakeUnique(name, "Collection", used);
+                        ? fk.SourceClassName + (fk.IsOneToOne ? FkColumnBase(fk) : FkColumnBase(fk).Pluralize())
+                        : (fk.IsOneToOne ? fk.SourceClassName : fk.SourceClassName.Pluralize());
+                    fk.InverseNavigationName = MakeUnique(name, fk.IsOneToOne ? "Inverse" : "Collection", used);
                 }
             }
         }
@@ -99,6 +101,17 @@ namespace DbToEntity.Core
         {
             var used = new HashSet<string>();
             return e.Labels.Select(label => MakeUnique(SanitizeIdentifier(label), "_", used)).ToList();
+        }
+
+        /// <summary>
+        /// True when the columns are, as a set, exactly the primary key or the columns of a unique index that is
+        /// neither partial nor has expression parts. Only then can each principal have at most one dependent.
+        /// </summary>
+        public static bool HasUniqueColumns(TableMetadata table, IReadOnlyCollection<string> columns)
+        {
+            var set = new HashSet<string>(columns);
+            if (table.PrimaryKeys.Count > 0 && set.SetEquals(table.PrimaryKeys)) return true;
+            return table.Indexes.Any(i => i.IsUnique && !i.IsPartial && !i.HasExpressions && set.SetEquals(i.Columns));
         }
 
         // e.g. photo_file_id -> PhotoFile
