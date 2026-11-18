@@ -72,7 +72,12 @@ db2entity generate --connection "Host=localhost;Database=mydb;..." --schema "pub
 
 ### 2. Update Specific Tables (Incremental)
 
-When you modify a specific table (e.g., adding a column to `users`), use `update` to refresh just that entity and the `DbContext` without checking out the whole database again.
+When you change specific tables (e.g., add a column to `users`), use `update` to refresh them without regenerating everything:
+
+-   Relationships to the other tables already in your `DbContext` are kept.
+-   Related tables are regenerated too when their navigation properties depend on the change (for example, after adding or dropping a foreign key). The tool lists them.
+-   In the `DbContext`, only the configuration blocks of regenerated tables are replaced; missing `DbSet`s are added. Everything else stays as it was.
+-   To add a new table, pass it in `--tables`.
 
 ```powershell
 db2entity update --tables "users"

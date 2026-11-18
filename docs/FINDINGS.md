@@ -17,14 +17,19 @@ Status legend: ✅ fixed · 🔲 open
 - **Where:** `RoslynEntityGenerator.GenerateEntity`
 - `ICollection<>` navigations only compiled in projects with `ImplicitUsings` turned on. The new test project caught this. Fixed by emitting the using.
 
-### 1.2 🔲 `update` loses relationships and puts files in the wrong place
+### 1.2 ✅ `update` loses relationships and puts files in the wrong place
 - **Where:** `Program.cs` `RunUpdate`, `PostgresMetadataProvider.cs:81`
 - The provider loads only the named tables and then throws away FKs whose target isn't loaded. So `update --tables users` removes every navigation to tables you didn't list, and every collection pointing back.
 - With `--separate-by-schema`, `update` leaves out the `Tables/`/`Views/` type folder that `generate` uses. The file lands somewhere else, leaving two copies of the class.
 - `UpdateDbContext` only adds missing `DbSet`s. `OnModelCreating` is never updated, so new columns and FKs get no fluent config.
 - `update` works out duplicate class names without `.Replace("_","")`, unlike `generate`.
-- *Partly addressed:* `update` now fills in FK class names and navigation names (`ResolveForeignKeyNames`).
-- **Suggested fix:** load the whole schema's metadata for naming and relationships, and write files only for the requested tables. Move the folder/namespace logic into one helper shared by both commands.
+- **Fixed:**
+  - The table set is the tables the existing `DbContext` maps (`IncrementalUpdate.ReadMappedTableNames`) plus the requested ones. Metadata for all of them is loaded, so relationships are kept and names are computed over the same set as `generate`.
+  - Requested tables are regenerated together with related tables, both now (FKs either way) and before (navigation types in the old entity file), so adding or dropping an FK updates both sides.
+  - `UpdateDbContext` replaces only those tables' `modelBuilder.Entity<T>` blocks, inserting new ones before `OnModelCreatingPartial`, and adds missing `DbSet`s and `using`s. It also refreshes `ConfigureNpgsql`. Other blocks are untouched, because their entity files may not match the current database.
+  - Naming and folder layout live in `ModelPipeline` (Core) and are shared by both commands and the tests.
+- **Not handled:** tables dropped from the database stay in the `DbContext`. Renamed tables appear as new ones.
+- Also fixed: generated files had mixed line endings (LF header and doc comments, CRLF body). Everything is CRLF now, and a test checks it.
 
 ### 1.3 ✅ SQL injection in the `--tables` filter
 - **Where:** `PostgresMetadataProvider.cs:33-38`
@@ -87,10 +92,10 @@ Status legend: ✅ fixed · 🔲 open
 ---
 
 ## 3. Upkeep and technical debt
-- ✅ **Tests added:** `DbToEntity.Tests` (55 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
+- ✅ **Tests added:** `DbToEntity.Tests` (68 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
 - **N+1 queries:** 4 round-trips per table. Load each kind of metadata in one query for all tables.
 - `System.CommandLine 2.0.0-beta4` is an old preview. The stable 2.x API is different.
-- `Program.cs` mixes command wiring with naming and folder-layout logic. That logic should live in Core so it can be tested.
+- ✅ Naming and folder-layout logic moved from `Program.cs` to Core (`ModelPipeline`, `IncrementalUpdate`). The CLI is now mostly I/O.
 - Leftover code: unused `ToPascalCase`, versions that don't match (Core 1.0.6 vs CLI 1.2.9), Core `<Authors>` set to `DbToEntity`.
 
 ---
@@ -100,5 +105,5 @@ Status legend: ✅ fixed · 🔲 open
 2. ✅ Test project, a safety net for everything below
 3. ✅ F1 type mapping → ✅ F2 delete rules → ✅ F3 one-to-one
 4. ✅ F5 `OnModelCreatingPartial`
-5. Fix `update` (1.2), ✅ the SQL parameter (1.3), schema-reading gaps (1.4)
+5. ✅ Fix `update` (1.2), ✅ the SQL parameter (1.3), schema-reading gaps (1.4)
 6. Quick wins Q1–Q5, then F6/F7

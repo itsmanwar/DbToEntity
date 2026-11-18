@@ -111,163 +111,106 @@ namespace DbToEntity.CLI
         {
             Console.WriteLine($"Starting generation for schema '{config.Schema ?? "all"}'...");
 
-            // 1. Get Metadata
             IPostgresMetadataProvider metadataProvider = new PostgresMetadataProvider();
             var tables = await metadataProvider.GetTablesAsync(config.ConnectionString, config.Schema, config.IncludedTables.Count > 0 ? config.IncludedTables : null);
             var enums = await metadataProvider.GetEnumsAsync(config.ConnectionString);
-
             Console.WriteLine($"Found {tables.Count} tables.");
 
-            // 2. Resolve Class Names (Handle Duplicates)
-            var duplicateNames = tables
-                .GroupBy(t => t.Name.Singularize().Pascalize().Replace("_", ""))
-                .Where(g => g.Count() > 1)
-                .Select(g => g.Key)
-                .ToHashSet();
+            ModelPipeline.ResolveClassNames(tables);
+            var usedEnums = Prepare(tables, enums);
 
-            foreach (var table in tables)
-            {
-                var baseName = table.Name.Singularize().Pascalize().Replace("_", "");
-                if (duplicateNames.Contains(baseName))
-                {
-                    // Collision detected: Use SalesOrder instead of Order
-                    table.ClassName = table.Schema.Pascalize() + baseName;
-                }
-                else
-                {
-                    table.ClassName = baseName;
-                }
-            }
-
-            // 2.1 Propagate class names to foreign keys and resolve navigation names
-            var usedEnums = ResolveTypesAndNames(tables, enums);
-
-            // 3. Generate Code
             IEntityGenerator generator = new RoslynEntityGenerator();
-
             Directory.CreateDirectory(config.OutputDirectory);
 
             foreach (var table in tables)
             {
                 Console.WriteLine($"Generating entity for {table.Name} (Class: {table.ClassName})...");
-
-                var targetDirectory = config.OutputDirectory;
-                var targetNamespace = config.Namespace;
-
-                if (config.SeparateBySchema)
-                {
-                    // 1. Schema Folder (if not public)
-                    if (!string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
-                    {
-                        var schemaFolder = table.Schema.Pascalize();
-                        targetDirectory = Path.Combine(targetDirectory, schemaFolder);
-                        targetNamespace = $"{targetNamespace}.{schemaFolder}";
-                    }
-
-                    // 2. Type Folder (Tables/Views)
-                    var typeFolder = table.Type.ToString().Pluralize(); // Tables, Views, MaterializedViews
-                    targetDirectory = Path.Combine(targetDirectory, typeFolder);
-                    targetNamespace = $"{targetNamespace}.{typeFolder}";
-
-                    Directory.CreateDirectory(targetDirectory);
-                }
-
-                table.Namespace = targetNamespace; // Store for DbContext generation
-
-                var file = generator.GenerateEntity(table, targetNamespace);
-                var path = Path.Combine(targetDirectory, file.FileName);
-                await File.WriteAllTextAsync(path, file.Content);
+                await WriteEntityAsync(generator, table, config);
             }
 
-            // For Generate, we overwrite DbContext
-            Console.WriteLine("Generating DbContext...");
             await WriteEnumsAsync(generator, usedEnums, config);
 
+            Console.WriteLine("Generating DbContext...");
             var dbContextFile = generator.GenerateDbContext(tables, config.Namespace, config.DbContextName, config.SeparateBySchema, usedEnums);
             await File.WriteAllTextAsync(Path.Combine(config.OutputDirectory, dbContextFile.FileName), dbContextFile.Content);
 
-            if (usedEnums.Count > 0)
-            {
-                Console.WriteLine($"Note: {usedEnums.Count} PostgreSQL enum(s) mapped. Register them where the context is configured:");
-                Console.WriteLine($"      options.UseNpgsql(connectionString, {config.DbContextName}.ConfigureNpgsql)   (requires EF Core 9+)");
-            }
-
+            PrintEnumHint(usedEnums, config);
             Console.WriteLine("Generation complete.");
         }
 
         static async Task RunUpdate(GeneratorConfig config)
         {
-            Console.WriteLine($"Starting update for {config.IncludedTables.Count} tables...");
+            Console.WriteLine($"Starting update for {config.IncludedTables.Count} table(s)...");
 
-            // 1. Get Metadata for specific tables
+            // The project's table set = tables the existing DbContext maps + the requested ones. Loading all of
+            // them keeps relationships between them; tables never generated stay out, so no navigation points at
+            // a class the project doesn't have.
+            var dbContextPath = Path.Combine(config.OutputDirectory, $"{config.DbContextName}.cs");
+            string? existingDbContext = File.Exists(dbContextPath) ? await File.ReadAllTextAsync(dbContextPath) : null;
+            if (existingDbContext == null)
+            {
+                Console.WriteLine($"Warning: {dbContextPath} not found. Only the requested tables are loaded, so relationships to other tables are skipped. Run 'generate' to create the DbContext.");
+            }
+
+            var tableSet = config.IncludedTables
+                .Concat(existingDbContext != null ? IncrementalUpdate.ReadMappedTableNames(existingDbContext) : Enumerable.Empty<string>())
+                .Distinct()
+                .ToList();
+
             IPostgresMetadataProvider metadataProvider = new PostgresMetadataProvider();
-            var tables = await metadataProvider.GetTablesAsync(config.ConnectionString, config.Schema, config.IncludedTables);
+            var tables = await metadataProvider.GetTablesAsync(config.ConnectionString, config.Schema, tableSet);
             var enums = await metadataProvider.GetEnumsAsync(config.ConnectionString);
 
-            if (tables.Count == 0)
+            var missing = config.IncludedTables.Where(n => tables.All(t => t.Name != n)).ToList();
+            if (missing.Count > 0)
+            {
+                Console.WriteLine($"Warning: not found in the database: {string.Join(", ", missing)}");
+            }
+            if (missing.Count == config.IncludedTables.Count)
             {
                 Console.WriteLine("No tables found to update.");
                 return;
             }
 
+            // Same naming over the same table set as 'generate', so class and navigation names stay stable.
+            ModelPipeline.ResolveClassNames(tables);
+            var usedEnums = Prepare(tables, enums);
+            foreach (var table in tables)
+            {
+                ModelPipeline.GetLocation(table, config.OutputDirectory, config.Namespace, config.SeparateBySchema);
+            }
+
+            var toRegenerate = IncrementalUpdate.SelectTablesToRegenerate(tables, config.IncludedTables, table =>
+            {
+                var (directory, _) = ModelPipeline.GetLocation(table, config.OutputDirectory, config.Namespace, config.SeparateBySchema);
+                var path = Path.Combine(directory, $"{table.ClassName}.cs");
+                return File.Exists(path) ? File.ReadAllText(path) : null;
+            });
+
+            var related = toRegenerate.Where(t => !config.IncludedTables.Contains(t.Name)).Select(t => t.Name).ToList();
+            if (related.Count > 0)
+            {
+                Console.WriteLine($"Also regenerating related tables (their navigations depend on the updated tables): {string.Join(", ", related)}");
+            }
+
             IEntityGenerator generator = new RoslynEntityGenerator();
             Directory.CreateDirectory(config.OutputDirectory);
 
-            // 2. Resolve Class Names (Handle Duplicates for Updated Tables - this logic is partial but safe enough for updates if context is clean)
-            // Ideally should check ALL tables to know global duplicates, but for MVP we assume local or re-fetch all names if critical.
-            // For now, let's keep it simple: We re-calculate based on fetched set.
-            var duplicateNames = tables
-                .GroupBy(t => t.Name.Singularize().Pascalize())
-                .Where(g => g.Count() > 1)
-                .Select(g => g.Key)
-                .ToHashSet();
-
-            foreach (var table in tables)
-            {
-                var baseName = table.Name.Singularize().Pascalize();
-                if (duplicateNames.Contains(baseName))
-                {
-                    table.ClassName = table.Schema.Pascalize() + baseName;
-                }
-                else
-                {
-                    table.ClassName = baseName;
-                }
-            }
-
-            var usedEnums = ResolveTypesAndNames(tables, enums);
-
-            // 3. Regenerate Entities
-            foreach (var table in tables)
+            foreach (var table in toRegenerate)
             {
                 Console.WriteLine($"Updating entity for {table.Name} (Class: {table.ClassName})...");
-
-                var targetDirectory = config.OutputDirectory;
-                var targetNamespace = config.Namespace;
-
-                if (config.SeparateBySchema && !string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
-                {
-                    var schemaFolder = table.Schema.Pascalize();
-                    targetDirectory = Path.Combine(config.OutputDirectory, schemaFolder);
-                    targetNamespace = $"{config.Namespace}.{schemaFolder}";
-                    Directory.CreateDirectory(targetDirectory);
-                }
-
-                var file = generator.GenerateEntity(table, targetNamespace);
-                var path = Path.Combine(targetDirectory, file.FileName);
-                await File.WriteAllTextAsync(path, file.Content);
+                await WriteEntityAsync(generator, table, config);
             }
 
-            // 3. Update DbContext
-            var dbContextPath = Path.Combine(config.OutputDirectory, $"{config.DbContextName}.cs");
-            if (File.Exists(dbContextPath))
+            await WriteEnumsAsync(generator, usedEnums, config);
+
+            if (existingDbContext != null)
             {
                 Console.WriteLine("Updating DbContext...");
-                var existingCode = await File.ReadAllTextAsync(dbContextPath);
-                var updatedFile = generator.UpdateDbContext(existingCode, tables, config.DbContextName);
-                if (updatedFile.Content != existingCode)
+                var updated = generator.UpdateDbContext(existingDbContext, toRegenerate, tables, config.DbContextName, usedEnums);
+                if (updated.Content != existingDbContext)
                 {
-                    await File.WriteAllTextAsync(dbContextPath, updatedFile.Content);
+                    await File.WriteAllTextAsync(dbContextPath, updated.Content);
                     Console.WriteLine("DbContext updated.");
                 }
                 else
@@ -275,36 +218,27 @@ namespace DbToEntity.CLI
                     Console.WriteLine("DbContext already up to date.");
                 }
             }
-            else
-            {
-                Console.WriteLine("Warning: DbContext not found. Skipping DbContext update.");
-            }
 
-            await WriteEnumsAsync(generator, usedEnums, config);
-            if (usedEnums.Count > 0 && File.Exists(dbContextPath) && !File.ReadAllText(dbContextPath).Contains("ConfigureNpgsql"))
-            {
-                Console.WriteLine($"Warning: these tables use PostgreSQL enums but {config.DbContextName} has no ConfigureNpgsql helper. Run 'generate' to add it.");
-            }
-
+            PrintEnumHint(usedEnums, config);
             Console.WriteLine("Update complete.");
         }
 
-        // Order matters: enum class names feed column types, and column types may drop columns/FKs
-        // before navigation names are assigned. Returns the enums referenced by the loaded columns.
-        static List<EnumMetadata> ResolveTypesAndNames(List<TableMetadata> tables, List<EnumMetadata> enums)
+        static List<EnumMetadata> Prepare(List<TableMetadata> tables, List<EnumMetadata> enums)
         {
-            EntityNaming.ResolveEnumNames(enums, tables);
-
-            foreach (var warning in TypeMapper.ResolveColumnTypes(tables, enums))
+            var (usedEnums, warnings) = ModelPipeline.Prepare(tables, enums);
+            foreach (var warning in warnings)
             {
                 Console.WriteLine($"Warning: {warning}");
             }
+            return usedEnums;
+        }
 
-            ResolveForeignKeyNames(tables);
-
-            return enums
-                .Where(e => tables.Any(t => t.Columns.Any(c => c.TypeSchema == e.Schema && (c.DataType == e.Name || c.DataType == "_" + e.Name))))
-                .ToList();
+        static async Task WriteEntityAsync(IEntityGenerator generator, TableMetadata table, GeneratorConfig config)
+        {
+            var (directory, ns) = ModelPipeline.GetLocation(table, config.OutputDirectory, config.Namespace, config.SeparateBySchema);
+            Directory.CreateDirectory(directory);
+            var file = generator.GenerateEntity(table, ns);
+            await File.WriteAllTextAsync(Path.Combine(directory, file.FileName), file.Content);
         }
 
         static async Task WriteEnumsAsync(IEntityGenerator generator, List<EnumMetadata> enums, GeneratorConfig config)
@@ -317,38 +251,11 @@ namespace DbToEntity.CLI
             }
         }
 
-        // Fills Target/Source class names on every FK from the resolved table class names, then
-        // assigns navigation names. Must run after TableMetadata.ClassName is set.
-        static void ResolveForeignKeyNames(List<TableMetadata> tables)
+        static void PrintEnumHint(List<EnumMetadata> usedEnums, GeneratorConfig config)
         {
-            var tableByQualifiedName = tables.ToDictionary(t => $"{t.Schema}.{t.Name}", t => t);
-
-            foreach (var table in tables)
-            {
-                foreach (var fk in table.ForeignKeys)
-                {
-                    if (tableByQualifiedName.TryGetValue($"{fk.TargetSchema}.{fk.TargetTable}", out var targetTable))
-                    {
-                        fk.TargetClassName = targetTable.ClassName;
-                    }
-                    else
-                    {
-                        // Target not in the loaded set: fall back to algorithmic naming
-                        fk.TargetClassName = fk.TargetTable.Singularize().Pascalize();
-                    }
-                    fk.TargetClassNamePlural = fk.TargetClassName.Pluralize();
-                }
-
-                foreach (var fk in table.ReferencingForeignKeys)
-                {
-                    // The provider adds the same FK instance to the source's ForeignKeys and the target's
-                    // ReferencingForeignKeys, so identity lookup finds the source table across schemas.
-                    var sourceTable = tables.FirstOrDefault(t => t.ForeignKeys.Contains(fk));
-                    fk.SourceClassName = sourceTable?.ClassName ?? fk.SourceTable.Singularize().Pascalize();
-                }
-            }
-
-            EntityNaming.ResolveNavigationNames(tables);
+            if (usedEnums.Count == 0) return;
+            Console.WriteLine($"Note: {usedEnums.Count} PostgreSQL enum(s) mapped. Register them where the context is configured:");
+            Console.WriteLine($"      options.UseNpgsql(connectionString, {config.DbContextName}.ConfigureNpgsql)   (requires EF Core 9+)");
         }
 
         static string GetConnectionString(string providedConnection)

@@ -40,9 +40,8 @@ public sealed class GeneratedModel
     public static GeneratedModel Build(List<TableMetadata> tables, List<EnumMetadata>? enums = null, Dictionary<string, string>? userSources = null)
     {
         enums ??= new List<EnumMetadata>();
-        EntityNaming.ResolveEnumNames(enums, tables);
-        var warnings = TypeMapper.ResolveColumnTypes(tables, enums);
-        EntityNaming.ResolveNavigationNames(tables);
+        // Class names come from SchemaBuilder so tests control them; everything after is the CLI's pipeline.
+        var (_, warnings) = ModelPipeline.Prepare(tables, enums);
 
         var generator = new RoslynEntityGenerator();
         var sources = new Dictionary<string, string>();
@@ -63,6 +62,10 @@ public sealed class GeneratedModel
         var assembly = Compile(userSources == null ? sources : sources.Concat(userSources).ToDictionary());
         return new GeneratedModel { Sources = sources, Model = CreateModel(assembly), Warnings = warnings };
     }
+
+    /// <summary>Compiles an arbitrary set of files (e.g. a project after an incremental update) and builds the model.</summary>
+    public static GeneratedModel FromSources(Dictionary<string, string> sources) =>
+        new() { Sources = sources, Model = CreateModel(Compile(sources)), Warnings = new() };
 
     /// <summary>Compiler diagnostics for the generated sources with the given nullable context (no emit).</summary>
     public IReadOnlyList<Diagnostic> Diagnostics(NullableContextOptions nullable) =>

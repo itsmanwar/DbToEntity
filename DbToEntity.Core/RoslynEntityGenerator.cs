@@ -222,34 +222,23 @@ namespace DbToEntity.Core
             var mapCalls = string.Concat(enums.Select(e =>
                 $"npgsql.MapEnum<{e.ClassName}>({Literal(e.Name)}, {Literal(e.Schema)});\n"));
 
-            return ParseMemberDeclaration($@"
+            var source = $@"
 /// <summary>
 /// Registers the PostgreSQL enum types used by this model. Pass it to UseNpgsql:
 /// <c>options.UseNpgsql(connectionString, {dbContextName}.ConfigureNpgsql)</c>
 /// </summary>
 public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure.NpgsqlDbContextOptionsBuilder npgsql)
 {{
-{mapCalls}}}")!;
+{mapCalls}}}";
+
+            // NormalizeWhitespace doesn't rewrite line breaks inside doc comments, so make them CRLF up front
+            // (this source file's own line endings would otherwise leak into the output).
+            return ParseMemberDeclaration(source.Replace("\r\n", "\n").Replace("\n", "\r\n"))!;
         }
 
         public GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName, bool separateBySchema = false, IReadOnlyList<EnumMetadata>? enums = null)
         {
-            var dbSets = new List<MemberDeclarationSyntax>();
-
-            foreach (var table in tables)
-            {
-                var className = table.ClassName; // Use resolved name
-                var dbSetType = $"DbSet<{className}>";
-                var propName = className.Pluralize();
-
-                var property = PropertyDeclaration(ParseTypeName(dbSetType), propName)
-                    .AddModifiers(Token(SyntaxKind.PublicKeyword))
-                     .AddAccessorListAccessors(
-                    AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
-                    AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
-
-                dbSets.Add(property);
-            }
+            var dbSets = tables.Select(CreateDbSet).ToList();
 
             var baseClass = SimpleBaseType(ParseTypeName("DbContext"));
 
@@ -274,10 +263,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                 classDeclaration = classDeclaration.AddMembers(CreateConfigureNpgsqlMethod(dbContextName, enums));
             }
 
-            // The provider puts the same FK instance in the principal's ReferencingForeignKeys.
-            var principalByFk = tables
-                .SelectMany(t => t.ReferencingForeignKeys.Select(fk => (fk, t)))
-                .ToDictionary(x => x.fk, x => x.t);
+            var principalByFk = BuildPrincipalLookup(tables);
 
             var statements = new List<StatementSyntax>();
             statements.Add(ExpressionStatement(
@@ -285,204 +271,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                     MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, BaseExpression(), IdentifierName("OnModelCreating")))
                 .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(IdentifierName("modelBuilder")))))));
 
-            foreach (var table in tables)
-            {
-                var className = table.ClassName; // Use resolved name
-
-                // entity => { ... }
-                var lambdaStatements = new List<StatementSyntax>();
-
-                // .ToTable("name", "schema") or .ToView("name", "schema")
-                string mappingMethod = (table.Type == ObjectType.View || table.Type == ObjectType.MaterializedView) ? "ToView" : "ToTable";
-
-                var toTableArgs = new List<ArgumentSyntax> { Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.Name))) };
-                if (!string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
-                {
-                    toTableArgs.Add(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.Schema))));
-                }
-
-                lambdaStatements.Add(ExpressionStatement(
-                    InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName(mappingMethod)))
-                    .WithArgumentList(ArgumentList(SeparatedList(toTableArgs)))));
-
-                // .HasKey(e => e.Id) or .HasNoKey()
-                if (table.PrimaryKeys.Any())
-                {
-                    var keyProps = table.PrimaryKeys.Select(k => EntityNaming.GetPropertyName(k, className));
-                    ExpressionSyntax keyExpression;
-                    if (keyProps.Count() == 1)
-                    {
-                        keyExpression = SimpleLambdaExpression(Parameter(Identifier("e")),
-                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("e"), IdentifierName(keyProps.First())));
-                    }
-                    else
-                    {
-                        var anonProps = keyProps.Select(p => AnonymousObjectMemberDeclarator(
-                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("e"), IdentifierName(p))));
-                        keyExpression = SimpleLambdaExpression(Parameter(Identifier("e")),
-                            AnonymousObjectCreationExpression(SeparatedList(anonProps)));
-                    }
-
-                    var hasKeyInvocation = InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("HasKey")))
-                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(keyExpression))));
-
-                    if (!string.IsNullOrEmpty(table.PrimaryKeyName))
-                    {
-                        hasKeyInvocation = InvocationExpression(
-                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasKeyInvocation, IdentifierName("HasName")))
-                            .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.PrimaryKeyName))))));
-                    }
-
-                    lambdaStatements.Add(ExpressionStatement(hasKeyInvocation));
-                }
-                else
-                {
-                    // Keyless Entity (View)
-                    lambdaStatements.Add(ExpressionStatement(
-                       InvocationExpression(
-                           MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("HasNoKey")))));
-                }
-
-
-                // Properties
-                foreach (var col in table.Columns)
-                {
-                    var propName = EntityNaming.GetPropertyName(col.Name, className);
-                    var propertyAccess = InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("Property")))
-                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
-                            SimpleLambdaExpression(Parameter(Identifier("e")),
-                                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("e"), IdentifierName(propName)))))));
-
-                    ExpressionSyntax currentExpression = propertyAccess;
-
-                    currentExpression = InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasColumnName")))
-                                    .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.Name))))));
-
-                    // Only emitted where Npgsql's default store type for the CLR type differs (e.g. timestamp, jsonb).
-                    if (!string.IsNullOrEmpty(col.ColumnType))
-                    {
-                        currentExpression = InvocationExpression(
-                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasColumnType")))
-                            .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.ColumnType))))));
-                    }
-
-                    if (!string.IsNullOrEmpty(col.DefaultValue))
-                    {
-                        currentExpression = InvocationExpression(
-                           MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasDefaultValueSql")))
-                           .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.DefaultValue))))));
-                    }
-
-                    if (!col.IsNullable)
-                    {
-                        currentExpression = InvocationExpression(
-                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("IsRequired")));
-                    }
-
-                    if (col.MaxLength.HasValue && col.ClrType == "string")
-                    {
-                        currentExpression = InvocationExpression(
-                           MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasMaxLength")))
-                           .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.NumericLiteralExpression, Literal(col.MaxLength.GetValueOrDefault()))))));
-                    }
-
-                    lambdaStatements.Add(ExpressionStatement(currentExpression));
-                }
-
-                // Relationships
-                foreach (var fk in table.ForeignKeys)
-                {
-                    var navPropName = RequireName(fk.NavigationName, fk);
-                    var sourceProps = fk.SourceColumns.Select(c => EntityNaming.GetPropertyName(c, className)).ToList();
-
-                    var hasOne = InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("HasOne")))
-                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
-                             SimpleLambdaExpression(Parameter(Identifier("d")),
-                                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(navPropName)))))));
-
-                    // .WithMany(p => p.Inverse) / .WithOne(p => p.Inverse) pairs the reference with its inverse; a bare
-                    // .WithMany() would leave the inverse to be matched by convention as a second relationship.
-                    var withManyArgs = string.IsNullOrEmpty(fk.InverseNavigationName)
-                        ? ArgumentList()
-                        : ArgumentList(SingletonSeparatedList(Argument(
-                            SimpleLambdaExpression(Parameter(Identifier("p")),
-                                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("p"), IdentifierName(fk.InverseNavigationName))))));
-
-                    var withMany = InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasOne, IdentifierName(fk.IsOneToOne ? "WithOne" : "WithMany")))
-                        .WithArgumentList(withManyArgs);
-
-                    ExpressionSyntax fkLambdaExpr;
-                    if (sourceProps.Count == 1)
-                    {
-                        fkLambdaExpr = MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(sourceProps[0]));
-                    }
-                    else
-                    {
-                        var anonProps = sourceProps.Select(p => AnonymousObjectMemberDeclarator(
-                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(p))));
-                        fkLambdaExpr = AnonymousObjectCreationExpression(SeparatedList(anonProps));
-                    }
-
-                    // For one-to-one EF can't infer which side is dependent, so HasForeignKey names it: HasForeignKey<TDependent>.
-                    SimpleNameSyntax hasForeignKeyName = fk.IsOneToOne
-                        ? GenericName(Identifier("HasForeignKey")).WithTypeArgumentList(TypeArgumentList(SingletonSeparatedList(ParseTypeName(className))))
-                        : IdentifierName("HasForeignKey");
-
-                    ExpressionSyntax hasForeignKey = InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, withMany, hasForeignKeyName))
-                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
-                             SimpleLambdaExpression(Parameter(Identifier("d")), fkLambdaExpr)))));
-
-                    // EF assumes an FK targets the principal's primary key. When the constraint references other
-                    // columns (a unique constraint), name them, keeping confkey order so pairs line up.
-                    if (principalByFk.TryGetValue(fk, out var principal) && !principal.PrimaryKeys.SequenceEqual(fk.TargetColumns))
-                    {
-                        var principalProps = fk.TargetColumns.Select(c => EntityNaming.GetPropertyName(c, principal.ClassName)).ToList();
-                        ExpressionSyntax principalLambdaBody = principalProps.Count == 1
-                            ? MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("p"), IdentifierName(principalProps[0]))
-                            : AnonymousObjectCreationExpression(SeparatedList(principalProps.Select(prop => AnonymousObjectMemberDeclarator(
-                                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("p"), IdentifierName(prop))))));
-
-                        SimpleNameSyntax hasPrincipalKeyName = fk.IsOneToOne
-                            ? GenericName(Identifier("HasPrincipalKey")).WithTypeArgumentList(TypeArgumentList(SingletonSeparatedList(ParseTypeName(principal.ClassName))))
-                            : IdentifierName("HasPrincipalKey");
-
-                        hasForeignKey = InvocationExpression(
-                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasForeignKey, hasPrincipalKeyName))
-                            .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
-                                SimpleLambdaExpression(Parameter(Identifier("p")), principalLambdaBody)))));
-                    }
-
-                    // Always explicit: EF's convention for required FKs is Cascade, which would cascade on the client
-                    // even when the database says NO ACTION.
-                    var onDelete = InvocationExpression(
-                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasForeignKey, IdentifierName("OnDelete")))
-                       .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
-                           MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("DeleteBehavior"), IdentifierName(GetDeleteBehavior(fk.OnDelete)))))));
-
-                    var hasConstraint = InvocationExpression(
-                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, onDelete, IdentifierName("HasConstraintName")))
-                       .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(fk.ConstraintName))))));
-
-                    lambdaStatements.Add(ExpressionStatement(hasConstraint));
-                }
-
-                var entityMethod = GenericName(Identifier("Entity"))
-                    .WithTypeArgumentList(TypeArgumentList(SingletonSeparatedList(ParseTypeName(className))));
-
-                var entityConfig = InvocationExpression(
-                    MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("modelBuilder"), entityMethod))
-                    .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
-                        ParenthesizedLambdaExpression(ParameterList(SingletonSeparatedList(Parameter(Identifier("entity")))), Block(lambdaStatements))))));
-
-                statements.Add(ExpressionStatement(entityConfig));
-            }
+            statements.AddRange(tables.Select(t => CreateEntityConfiguration(t, principalByFk)));
 
             // Runs last, so configuration in the user's own partial class file overrides the generated configuration.
             statements.Add(ExpressionStatement(
@@ -537,63 +326,295 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
             };
         }
 
-        public GeneratedFile UpdateDbContext(string existingCode, List<TableMetadata> tables, string dbContextName)
+        /// <summary>The DbSet property for a table: <c>public DbSet&lt;User&gt; Users { get; set; }</c>.</summary>
+        private static PropertyDeclarationSyntax CreateDbSet(TableMetadata table) =>
+            PropertyDeclaration(ParseTypeName($"DbSet<{table.ClassName}>"), table.ClassName.Pluralize())
+                .AddModifiers(Token(SyntaxKind.PublicKeyword))
+                .AddAccessorListAccessors(
+                    AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
+                    AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
+
+        // The provider puts the same FK instance in the principal's ReferencingForeignKeys.
+        private static Dictionary<ForeignKeyMetadata, TableMetadata> BuildPrincipalLookup(IEnumerable<TableMetadata> tables) =>
+            tables.SelectMany(t => t.ReferencingForeignKeys.Select(fk => (fk, t))).ToDictionary(x => x.fk, x => x.t);
+
+        /// <summary>One table's fluent configuration: <c>modelBuilder.Entity&lt;User&gt;(entity => { ... });</c></summary>
+        private static StatementSyntax CreateEntityConfiguration(TableMetadata table, IReadOnlyDictionary<ForeignKeyMetadata, TableMetadata> principalByFk)
         {
-            var tree = CSharpSyntaxTree.ParseText(existingCode);
-            var root = tree.GetRoot() as CompilationUnitSyntax;
+            var className = table.ClassName;
 
-            if (root == null) throw new Exception("Could not parse existing DbContext");
+            // entity => { ... }
+            var lambdaStatements = new List<StatementSyntax>();
 
-            var classNode = root.DescendantNodes()
-                .OfType<ClassDeclarationSyntax>()
-                .FirstOrDefault(c => c.Identifier.Text == dbContextName);
+            // .ToTable("name", "schema") or .ToView("name", "schema")
+            string mappingMethod = (table.Type == ObjectType.View || table.Type == ObjectType.MaterializedView) ? "ToView" : "ToTable";
 
-            if (classNode == null) throw new Exception($"Could not find class {dbContextName} in existing code");
-
-            var newMembers = new List<MemberDeclarationSyntax>();
-            bool changed = false;
-
-            foreach (var table in tables)
+            var toTableArgs = new List<ArgumentSyntax> { Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.Name))) };
+            if (!string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
             {
-                var className = table.ClassName; // Use resolved name
-                var propName = className.Pluralize();
+                toTableArgs.Add(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.Schema))));
+            }
 
-                // Check if property exists
-                var exists = classNode.Members.OfType<PropertyDeclarationSyntax>()
-                    .Any(p => p.Identifier.Text == propName);
+            lambdaStatements.Add(ExpressionStatement(
+                InvocationExpression(
+                    MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName(mappingMethod)))
+                .WithArgumentList(ArgumentList(SeparatedList(toTableArgs)))));
 
-                if (!exists)
+            // .HasKey(e => e.Id) or .HasNoKey()
+            if (table.PrimaryKeys.Any())
+            {
+                var keyProps = table.PrimaryKeys.Select(k => EntityNaming.GetPropertyName(k, className));
+                ExpressionSyntax keyExpression;
+                if (keyProps.Count() == 1)
                 {
-                    var dbSetType = $"DbSet<{className}>";
-                    var property = PropertyDeclaration(ParseTypeName(dbSetType), propName)
-                        .AddModifiers(Token(SyntaxKind.PublicKeyword))
-                         .AddAccessorListAccessors(
-                        AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
-                        AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
+                    keyExpression = SimpleLambdaExpression(Parameter(Identifier("e")),
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("e"), IdentifierName(keyProps.First())));
+                }
+                else
+                {
+                    var anonProps = keyProps.Select(p => AnonymousObjectMemberDeclarator(
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("e"), IdentifierName(p))));
+                    keyExpression = SimpleLambdaExpression(Parameter(Identifier("e")),
+                        AnonymousObjectCreationExpression(SeparatedList(anonProps)));
+                }
 
-                    newMembers.Add(property);
-                    changed = true;
+                var hasKeyInvocation = InvocationExpression(
+                    MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("HasKey")))
+                    .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(keyExpression))));
+
+                if (!string.IsNullOrEmpty(table.PrimaryKeyName))
+                {
+                    hasKeyInvocation = InvocationExpression(
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasKeyInvocation, IdentifierName("HasName")))
+                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.PrimaryKeyName))))));
+                }
+
+                lambdaStatements.Add(ExpressionStatement(hasKeyInvocation));
+            }
+            else
+            {
+                // Keyless Entity (View)
+                lambdaStatements.Add(ExpressionStatement(
+                   InvocationExpression(
+                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("HasNoKey")))));
+            }
+
+
+            // Properties
+            foreach (var col in table.Columns)
+            {
+                var propName = EntityNaming.GetPropertyName(col.Name, className);
+                var propertyAccess = InvocationExpression(
+                    MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("Property")))
+                    .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
+                        SimpleLambdaExpression(Parameter(Identifier("e")),
+                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("e"), IdentifierName(propName)))))));
+
+                ExpressionSyntax currentExpression = propertyAccess;
+
+                currentExpression = InvocationExpression(
+                    MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasColumnName")))
+                                .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.Name))))));
+
+                // Only emitted where Npgsql's default store type for the CLR type differs (e.g. timestamp, jsonb).
+                if (!string.IsNullOrEmpty(col.ColumnType))
+                {
+                    currentExpression = InvocationExpression(
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasColumnType")))
+                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.ColumnType))))));
+                }
+
+                if (!string.IsNullOrEmpty(col.DefaultValue))
+                {
+                    currentExpression = InvocationExpression(
+                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasDefaultValueSql")))
+                       .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.DefaultValue))))));
+                }
+
+                if (!col.IsNullable)
+                {
+                    currentExpression = InvocationExpression(
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("IsRequired")));
+                }
+
+                if (col.MaxLength.HasValue && col.ClrType == "string")
+                {
+                    currentExpression = InvocationExpression(
+                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasMaxLength")))
+                       .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.NumericLiteralExpression, Literal(col.MaxLength.GetValueOrDefault()))))));
+                }
+
+                lambdaStatements.Add(ExpressionStatement(currentExpression));
+            }
+
+            // Relationships
+            foreach (var fk in table.ForeignKeys)
+            {
+                var navPropName = RequireName(fk.NavigationName, fk);
+                var sourceProps = fk.SourceColumns.Select(c => EntityNaming.GetPropertyName(c, className)).ToList();
+
+                var hasOne = InvocationExpression(
+                    MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("HasOne")))
+                    .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
+                         SimpleLambdaExpression(Parameter(Identifier("d")),
+                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(navPropName)))))));
+
+                // .WithMany(p => p.Inverse) / .WithOne(p => p.Inverse) pairs the reference with its inverse; a bare
+                // .WithMany() would leave the inverse to be matched by convention as a second relationship.
+                var withManyArgs = string.IsNullOrEmpty(fk.InverseNavigationName)
+                    ? ArgumentList()
+                    : ArgumentList(SingletonSeparatedList(Argument(
+                        SimpleLambdaExpression(Parameter(Identifier("p")),
+                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("p"), IdentifierName(fk.InverseNavigationName))))));
+
+                var withMany = InvocationExpression(
+                    MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasOne, IdentifierName(fk.IsOneToOne ? "WithOne" : "WithMany")))
+                    .WithArgumentList(withManyArgs);
+
+                ExpressionSyntax fkLambdaExpr;
+                if (sourceProps.Count == 1)
+                {
+                    fkLambdaExpr = MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(sourceProps[0]));
+                }
+                else
+                {
+                    var anonProps = sourceProps.Select(p => AnonymousObjectMemberDeclarator(
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(p))));
+                    fkLambdaExpr = AnonymousObjectCreationExpression(SeparatedList(anonProps));
+                }
+
+                // For one-to-one EF can't infer which side is dependent, so HasForeignKey names it: HasForeignKey<TDependent>.
+                SimpleNameSyntax hasForeignKeyName = fk.IsOneToOne
+                    ? GenericName(Identifier("HasForeignKey")).WithTypeArgumentList(TypeArgumentList(SingletonSeparatedList(ParseTypeName(className))))
+                    : IdentifierName("HasForeignKey");
+
+                ExpressionSyntax hasForeignKey = InvocationExpression(
+                    MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, withMany, hasForeignKeyName))
+                    .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
+                         SimpleLambdaExpression(Parameter(Identifier("d")), fkLambdaExpr)))));
+
+                // EF assumes an FK targets the principal's primary key. When the constraint references other
+                // columns (a unique constraint), name them, keeping confkey order so pairs line up.
+                if (principalByFk.TryGetValue(fk, out var principal) && !principal.PrimaryKeys.SequenceEqual(fk.TargetColumns))
+                {
+                    var principalProps = fk.TargetColumns.Select(c => EntityNaming.GetPropertyName(c, principal.ClassName)).ToList();
+                    ExpressionSyntax principalLambdaBody = principalProps.Count == 1
+                        ? MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("p"), IdentifierName(principalProps[0]))
+                        : AnonymousObjectCreationExpression(SeparatedList(principalProps.Select(prop => AnonymousObjectMemberDeclarator(
+                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("p"), IdentifierName(prop))))));
+
+                    SimpleNameSyntax hasPrincipalKeyName = fk.IsOneToOne
+                        ? GenericName(Identifier("HasPrincipalKey")).WithTypeArgumentList(TypeArgumentList(SingletonSeparatedList(ParseTypeName(principal.ClassName))))
+                        : IdentifierName("HasPrincipalKey");
+
+                    hasForeignKey = InvocationExpression(
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasForeignKey, hasPrincipalKeyName))
+                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
+                            SimpleLambdaExpression(Parameter(Identifier("p")), principalLambdaBody)))));
+                }
+
+                // Always explicit: EF's convention for required FKs is Cascade, which would cascade on the client
+                // even when the database says NO ACTION.
+                var onDelete = InvocationExpression(
+                   MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasForeignKey, IdentifierName("OnDelete")))
+                   .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
+                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("DeleteBehavior"), IdentifierName(GetDeleteBehavior(fk.OnDelete)))))));
+
+                var hasConstraint = InvocationExpression(
+                   MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, onDelete, IdentifierName("HasConstraintName")))
+                   .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(fk.ConstraintName))))));
+
+                lambdaStatements.Add(ExpressionStatement(hasConstraint));
+            }
+
+            var entityMethod = GenericName(Identifier("Entity"))
+                .WithTypeArgumentList(TypeArgumentList(SingletonSeparatedList(ParseTypeName(className))));
+
+            var entityConfig = InvocationExpression(
+                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("modelBuilder"), entityMethod))
+                .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
+                    ParenthesizedLambdaExpression(ParameterList(SingletonSeparatedList(Parameter(Identifier("entity")))), Block(lambdaStatements))))));
+
+            return ExpressionStatement(entityConfig);
+        }
+
+        /// <summary>
+        /// Refreshes an existing generated DbContext in place: for each table in <paramref name="tablesToRefresh"/>
+        /// its <c>modelBuilder.Entity&lt;T&gt;(...)</c> block is replaced (or inserted before the
+        /// OnModelCreatingPartial call), and its DbSet and namespace using are added if missing. Every other
+        /// entity block is left untouched, because entity files that weren't regenerated may not match the
+        /// current database. <paramref name="allTables"/> is the full loaded model (needed for principal keys);
+        /// <paramref name="enums"/> are the enums used by that model; the ConfigureNpgsql helper is rewritten
+        /// from them when present.
+        /// </summary>
+        public GeneratedFile UpdateDbContext(string existingCode, List<TableMetadata> tablesToRefresh, List<TableMetadata> allTables, string dbContextName, IReadOnlyList<EnumMetadata>? enums = null)
+        {
+            var root = (CompilationUnitSyntax)CSharpSyntaxTree.ParseText(existingCode).GetRoot();
+
+            var classNode = root.DescendantNodes().OfType<ClassDeclarationSyntax>().FirstOrDefault(c => c.Identifier.Text == dbContextName)
+                ?? throw new InvalidOperationException($"Could not find class {dbContextName} in the existing DbContext file.");
+            var onModelCreating = classNode.Members.OfType<MethodDeclarationSyntax>().FirstOrDefault(m => m.Identifier.Text == "OnModelCreating" && m.Body != null)
+                ?? throw new InvalidOperationException($"{dbContextName} has no OnModelCreating method. Run 'generate' to recreate it.");
+
+            // 1. Entity configuration blocks
+            var principalByFk = BuildPrincipalLookup(allTables);
+            var statements = onModelCreating.Body!.Statements.ToList();
+            foreach (var table in tablesToRefresh)
+            {
+                var block = CreateEntityConfiguration(table, principalByFk);
+                var existing = statements.FindIndex(st => GetConfiguredEntity(st) == table.ClassName);
+                if (existing >= 0)
+                {
+                    statements[existing] = block;
+                }
+                else
+                {
+                    var hook = statements.FindIndex(IsOnModelCreatingPartialCall);
+                    statements.Insert(hook >= 0 ? hook : statements.Count, block);
                 }
             }
 
-            if (changed)
-            {
-                var newClassNode = classNode.AddMembers(newMembers.ToArray());
-                var newRoot = root.ReplaceNode(classNode, newClassNode).NormalizeWhitespace();
+            var members = classNode.Members.ToList();
+            members[members.IndexOf(onModelCreating)] = onModelCreating.WithBody(Block(statements));
 
-                return new GeneratedFile
-                {
-                    FileName = $"{dbContextName}.cs",
-                    Content = newRoot.ToFullString()
-                };
+            // 2. DbSets
+            var existingProps = members.OfType<PropertyDeclarationSyntax>().Select(p => p.Identifier.Text).ToHashSet();
+            var newDbSets = tablesToRefresh.Where(t => !existingProps.Contains(t.ClassName.Pluralize())).Select(CreateDbSet).ToList();
+            var lastDbSet = members.FindLastIndex(m => m is PropertyDeclarationSyntax);
+            members.InsertRange(lastDbSet >= 0 ? lastDbSet + 1 : 0, newDbSets);
+
+            // 3. Enum helper: rewrite when enums are used, or when one exists (callers depend on it)
+            var helperIndex = members.FindIndex(m => m is MethodDeclarationSyntax md && md.Identifier.Text == "ConfigureNpgsql");
+            if ((enums != null && enums.Count > 0) || helperIndex >= 0)
+            {
+                var helper = CreateConfigureNpgsqlMethod(dbContextName, enums ?? Array.Empty<EnumMetadata>());
+                if (helperIndex >= 0) members[helperIndex] = helper;
+                else members.Insert(members.IndexOf(members.First(m => m is MethodDeclarationSyntax md && md.Identifier.Text == "OnModelCreating")), helper);
             }
 
-            return new GeneratedFile
-            {
-                FileName = $"{dbContextName}.cs",
-                Content = existingCode
-            };
+            var newRoot = root.ReplaceNode(classNode, classNode.WithMembers(List(members)));
+
+            // 4. Usings for entities in other namespaces (e.g. --separate-by-schema)
+            var contextNamespace = classNode.Ancestors().OfType<BaseNamespaceDeclarationSyntax>().FirstOrDefault()?.Name.ToString();
+            var existingUsings = newRoot.Usings.Select(u => u.Name?.ToString()).ToHashSet();
+            var newUsings = tablesToRefresh.Select(t => t.Namespace)
+                .Where(ns => !string.IsNullOrEmpty(ns) && ns != contextNamespace && !existingUsings.Contains(ns))
+                .Distinct().OrderBy(ns => ns)
+                .Select(ns => UsingDirective(ParseName(ns)));
+            newRoot = newRoot.AddUsings(newUsings.ToArray());
+
+            var content = newRoot.NormalizeWhitespace().ToFullString();
+            return new GeneratedFile { FileName = $"{dbContextName}.cs", Content = content };
         }
+
+        // "User" for `modelBuilder.Entity<User>(...)`, otherwise null.
+        private static string? GetConfiguredEntity(StatementSyntax statement) =>
+            statement is ExpressionStatementSyntax { Expression: InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Name: GenericNameSyntax { Identifier.Text: "Entity" } entity } } }
+                ? entity.TypeArgumentList.Arguments.FirstOrDefault()?.ToString()
+                : null;
+
+        private static bool IsOnModelCreatingPartialCall(StatementSyntax statement) =>
+            statement is ExpressionStatementSyntax { Expression: InvocationExpressionSyntax { Expression: IdentifierNameSyntax { Identifier.Text: "OnModelCreatingPartial" } } };
 
         private string ToPascalCase(string original)
         {
@@ -615,12 +636,14 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
         };
 
         // <auto-generated> also makes the compiler treat the file as generated code (e.g. nullable warnings off).
+        // CRLF to match NormalizeWhitespace's default, so a file has one line-ending style and re-normalizing it
+        // (UpdateDbContext) doesn't change it.
         private static readonly SyntaxTriviaList GeneratedHeader = ParseLeadingTrivia(
-            "// <auto-generated>\n" +
-            "//     Generated by db2entity. Changes to this file are lost when the code is regenerated.\n" +
-            "//     Put customizations in a separate file: partial classes for entities, and\n" +
-            "//     'partial void OnModelCreatingPartial(ModelBuilder modelBuilder)' for the DbContext.\n" +
-            "// </auto-generated>\n");
+            "// <auto-generated>\r\n" +
+            "//     Generated by db2entity. Changes to this file are lost when the code is regenerated.\r\n" +
+            "//     Put customizations in a separate file: partial classes for entities, and\r\n" +
+            "//     'partial void OnModelCreatingPartial(ModelBuilder modelBuilder)' for the DbContext.\r\n" +
+            "// </auto-generated>\r\n");
 
         private static string RequireName(string name, ForeignKeyMetadata fk)
         {
