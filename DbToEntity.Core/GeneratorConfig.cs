@@ -13,5 +13,7 @@ namespace DbToEntity.Core
         public bool SeparateBySchema { get; set; }
         public bool Pluralize { get; set; } = true; // false: --no-pluralize
         public bool FluentOnly { get; set; } // --fluent-only
+        public List<string> ExcludedTables { get; set; } = new(); // db2entity.json excludeTables (glob patterns)
+        public Dictionary<string, string> ClassNames { get; set; } = new(); // db2entity.json classNames
     }
 }

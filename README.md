@@ -90,7 +90,7 @@ db2entity update --tables "users"
 
 **Options:**
 -   `--tables`: (Required) List of tables to update.
--   All other options from `generate` apply. Pass the **same** `--context`, `--no-pluralize`, `--fluent-only`, `--namespace`, `--output` and `--separate-by-schema` values you used for `generate`; otherwise names and locations won't match.
+-   All other options from `generate` apply. You normally don't need them: `update` reads the settings `generate` saved in `db2entity.json`, so names and file locations match.
 
 ---
 
@@ -125,6 +125,29 @@ Uses `Humanizer` to ensure C# conventions:
 -   Table `users` -> Class `User`
 -   Column `first_name` -> Property `FirstName`
 -   Foreign Key `role_id` -> Navigation `Role`
+
+### Settings File (`db2entity.json`)
+`generate` saves the settings it used to `db2entity.json` in the current directory, and both commands read it. You can also write or edit it by hand:
+
+```jsonc
+{
+  "connectionStringName": "DefaultConnection",   // looked up in appsettings.json
+  "schema": "public",
+  "output": "./Data/Entities",
+  "namespace": "MyApp.Data",
+  "context": "ShopContext",
+  "separateBySchema": false,
+  "pluralize": true,
+  "fluentOnly": false,
+  "excludeTables": ["audit_*", "legacy.*"],       // globs on "table" or "schema.table"
+  "classNames": { "tbl_usr": "User", "sales.orders": "SalesOrder" }
+}
+```
+
+-   **Precedence:** command-line options, then `db2entity.json`, then built-in defaults. Use `--config <path>` to use a different file.
+-   Comments and trailing commas are allowed. Unknown settings are reported as errors, so typos don't go unnoticed.
+-   **Connection strings passed with `--connection` are never saved** (they usually contain a password). Use `connectionStringName`, or add `"connection"` to the file yourself.
+-   EF Core's `__EFMigrationsHistory` table is always excluded. Tables named in `--tables` are generated even if an exclude pattern matches them.
 
 ### Database Comments
 `COMMENT ON TABLE` / `COMMENT ON COLUMN` text becomes XML doc comments (`/// <summary>`) on the generated classes and properties, plus `HasComment(...)` in the fluent configuration, so IntelliSense shows your schema documentation.

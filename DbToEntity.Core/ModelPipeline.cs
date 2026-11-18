@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using DbToEntity.Core.Models;
 using Humanizer;
 
@@ -18,7 +20,9 @@ namespace DbToEntity.Core
         /// that <c>generate</c> and <c>update</c> agree.
         /// </summary>
         /// <param name="singularize">False keeps the table name's number (--no-pluralize): users → Users.</param>
-        public static void ResolveClassNames(List<TableMetadata> tables, bool singularize = true)
+        /// <param name="overrides">Explicit class names keyed by "table" or "schema.table" (db2entity.json
+        /// <c>classNames</c>). Throws <see cref="SettingsException"/> for invalid or clashing names.</param>
+        public static void ResolveClassNames(List<TableMetadata> tables, bool singularize = true, IReadOnlyDictionary<string, string>? overrides = null)
         {
             string BaseName(TableMetadata t) => (singularize ? t.Name.Singularize() : t.Name).Pascalize().Replace("_", "");
 
@@ -28,6 +32,54 @@ namespace DbToEntity.Core
                 var baseName = BaseName(table);
                 table.ClassName = duplicates.Contains(baseName) ? table.Schema.Pascalize() + baseName : baseName;
             }
+
+            if (overrides == null || overrides.Count == 0) return;
+
+            foreach (var table in tables)
+            {
+                // "schema.table" is more specific than "table".
+                if (!overrides.TryGetValue($"{table.Schema}.{table.Name}", out var name) && !overrides.TryGetValue(table.Name, out name))
+                    continue;
+                if (!Microsoft.CodeAnalysis.CSharp.SyntaxFacts.IsValidIdentifier(name))
+                    throw new SettingsException($"classNames: '{name}' (for table {table.Schema}.{table.Name}) is not a valid C# class name.");
+                table.ClassName = name;
+            }
+
+            var clash = tables.GroupBy(t => t.ClassName).FirstOrDefault(g => g.Count() > 1);
+            if (clash != null)
+                throw new SettingsException($"classNames: class name '{clash.Key}' is used by more than one table ({string.Join(", ", clash.Select(t => $"{t.Schema}.{t.Name}"))}).");
+        }
+
+        /// <summary>Tables that are never generated unless requested by name: EF Core's migration history.</summary>
+        public static readonly IReadOnlyList<string> AlwaysExcluded = new[] { "__EFMigrationsHistory" };
+
+        /// <summary>
+        /// Removes tables matching any glob pattern (<c>*</c>, <c>?</c>) on "table" or "schema.table", plus
+        /// <see cref="AlwaysExcluded"/>, and drops foreign keys to or from them. Tables named in
+        /// <paramref name="keep"/> (explicit --tables) are never excluded. Returns the removed tables' names.
+        /// </summary>
+        public static List<string> ExcludeTables(List<TableMetadata> tables, IEnumerable<string>? patterns, IEnumerable<string>? keep = null)
+        {
+            var regexes = (patterns ?? Enumerable.Empty<string>()).Concat(AlwaysExcluded)
+                .Select(p => new Regex("^" + Regex.Escape(p).Replace(@"\*", ".*").Replace(@"\?", ".") + "$", RegexOptions.IgnoreCase))
+                .ToList();
+            var kept = new HashSet<string>(keep ?? Enumerable.Empty<string>());
+
+            var removed = tables
+                .Where(t => !kept.Contains(t.Name) && regexes.Any(r => r.IsMatch(t.Name) || r.IsMatch($"{t.Schema}.{t.Name}")))
+                .ToList();
+            if (removed.Count == 0) return new List<string>();
+
+            var removedSet = new HashSet<TableMetadata>(removed);
+            var removedFks = removed.SelectMany(t => t.ForeignKeys.Concat(t.ReferencingForeignKeys)).ToHashSet();
+            tables.RemoveAll(removedSet.Contains);
+            foreach (var table in tables)
+            {
+                table.ForeignKeys.RemoveAll(removedFks.Contains);
+                table.ReferencingForeignKeys.RemoveAll(removedFks.Contains);
+            }
+
+            return removed.Select(t => $"{t.Schema}.{t.Name}").ToList();
         }
 
         /// <summary>
