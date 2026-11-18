@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.17.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <!-- Generated code is compiled against these and the EF model is built with the Npgsql provider (no DB connection needed). -->
@@ -19,6 +20,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DbToEntity.Core\DbToEntity.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Integration\schema.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

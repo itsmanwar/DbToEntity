@@ -24,7 +24,12 @@ namespace DbToEntity.Core
         /// <c>classNames</c>). Throws <see cref="SettingsException"/> for invalid or clashing names.</param>
         public static void ResolveClassNames(List<TableMetadata> tables, bool singularize = true, IReadOnlyDictionary<string, string>? overrides = null)
         {
-            string BaseName(TableMetadata t) => (singularize ? t.Name.Singularize() : t.Name).Pascalize().Replace("_", "");
+            // SanitizeIdentifier: table names may contain characters C# doesn't allow (e.g. "it's", "order-items").
+            string BaseName(TableMetadata t)
+            {
+                var name = EntityNaming.SanitizeIdentifier(singularize ? t.Name.Singularize() : t.Name).Replace("_", "");
+                return name.Length == 0 || char.IsDigit(name[0]) ? "_" + name : name; // "2fa_codes" -> _2faCode
+            }
 
             var duplicates = tables.GroupBy(BaseName).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
             foreach (var table in tables)
@@ -128,7 +133,7 @@ namespace DbToEntity.Core
                 {
                     fk.TargetClassName = tableByQualifiedName.TryGetValue($"{fk.TargetSchema}.{fk.TargetTable}", out var target)
                         ? target.ClassName
-                        : fk.TargetTable.Singularize().Pascalize(); // target not loaded
+                        : EntityNaming.SanitizeIdentifier(fk.TargetTable.Singularize()); // target not loaded
                     fk.TargetClassNamePlural = fk.TargetClassName.Pluralize();
                 }
 
@@ -137,7 +142,7 @@ namespace DbToEntity.Core
                     // The provider adds the same FK instance to the source's ForeignKeys and the target's
                     // ReferencingForeignKeys, so identity lookup finds the source table across schemas.
                     var source = tables.FirstOrDefault(t => t.ForeignKeys.Contains(fk));
-                    fk.SourceClassName = source?.ClassName ?? fk.SourceTable.Singularize().Pascalize();
+                    fk.SourceClassName = source?.ClassName ?? EntityNaming.SanitizeIdentifier(fk.SourceTable.Singularize());
                 }
             }
         }

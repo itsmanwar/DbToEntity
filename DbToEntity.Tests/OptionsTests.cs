@@ -73,6 +73,22 @@ public class OptionsTests
         Assert.Equal("Users", model.Entity("Role").GetNavigations().Single().Name); // collection, not "Userses"
     }
 
+    // Found by the integration tests: a table named "it's" produced `class It's`, so nothing compiled.
+    [Theory]
+    [InlineData("it's", "It")] // Humanizer singularizes "it's" to "it'"
+    [InlineData("order-items", "OrderItem")]
+    [InlineData("2fa_codes", "_2faCode")]
+    [InlineData("user profiles", "UserProfile")]
+    public void ClassNames_AreValidIdentifiers(string table, string expected)
+    {
+        var tables = new List<TableMetadata> { new() { Schema = "public", Name = table } };
+
+        ModelPipeline.ResolveClassNames(tables);
+
+        Assert.Equal(expected, tables[0].ClassName);
+        Assert.True(Microsoft.CodeAnalysis.CSharp.SyntaxFacts.IsValidIdentifier(tables[0].ClassName));
+    }
+
     [Fact]
     public void Pluralize_IsTheDefault()
     {

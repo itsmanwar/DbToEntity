@@ -27,6 +27,13 @@ public sealed class GeneratedModel
     public required Dictionary<string, string> Sources { get; init; }
     public required IModel Model { get; init; }
     public required List<string> Warnings { get; init; }
+    public required Assembly Assembly { get; init; }
+
+    /// <summary>The generated DbContext connected to a real database, configured as an app would (enum helper included).</summary>
+    public DbContext CreateContext(string connectionString) => CreateContext(Assembly, connectionString);
+
+    /// <summary>The compiled entity type for a generated class name.</summary>
+    public Type ClrType(string className) => Entity(className).ClrType;
 
     public IEntityType Entity(string className) =>
         Model.GetEntityTypes().SingleOrDefault(e => e.ClrType.Name == className)
@@ -61,12 +68,15 @@ public sealed class GeneratedModel
         sources[context.FileName] = context.Content;
 
         var assembly = Compile(userSources == null ? sources : sources.Concat(userSources).ToDictionary());
-        return new GeneratedModel { Sources = sources, Model = CreateModel(assembly), Warnings = warnings };
+        return new GeneratedModel { Sources = sources, Model = CreateModel(assembly), Warnings = warnings, Assembly = assembly };
     }
 
     /// <summary>Compiles an arbitrary set of files (e.g. a project after an incremental update) and builds the model.</summary>
-    public static GeneratedModel FromSources(Dictionary<string, string> sources) =>
-        new() { Sources = sources, Model = CreateModel(Compile(sources)), Warnings = new() };
+    public static GeneratedModel FromSources(Dictionary<string, string> sources)
+    {
+        var assembly = Compile(sources);
+        return new() { Sources = sources, Model = CreateModel(assembly), Warnings = new(), Assembly = assembly };
+    }
 
     /// <summary>Compiler diagnostics for the generated sources with the given nullable context (no emit).</summary>
     public IReadOnlyList<Diagnostic> Diagnostics(NullableContextOptions nullable) =>
@@ -98,17 +108,23 @@ public sealed class GeneratedModel
 
     private static IModel CreateModel(Assembly assembly)
     {
+        // Model building never opens a connection.
+        using var context = CreateContext(assembly, "Host=unused");
+        // Design-time model: keeps everything (e.g. comments) that the read-optimized runtime model drops.
+        return context.GetService<Microsoft.EntityFrameworkCore.Metadata.IDesignTimeModel>().Model;
+    }
+
+    private static DbContext CreateContext(Assembly assembly, string connectionString)
+    {
         var contextType = assembly.GetType($"{Namespace}.{ContextName}")
             ?? throw new Xunit.Sdk.XunitException($"{ContextName} not found in generated assembly");
 
         var builder = (DbContextOptionsBuilder)Activator.CreateInstance(typeof(DbContextOptionsBuilder<>).MakeGenericType(contextType))!;
-        // Model building never opens a connection. Use the generated enum helper exactly as an app would.
+        // Use the generated enum helper exactly as an app would.
         var configure = contextType.GetMethod("ConfigureNpgsql", BindingFlags.Public | BindingFlags.Static);
-        builder.UseNpgsql("Host=unused", configure?.CreateDelegate<Action<NpgsqlDbContextOptionsBuilder>>());
+        builder.UseNpgsql(connectionString, configure?.CreateDelegate<Action<NpgsqlDbContextOptionsBuilder>>());
 
-        using var context = (DbContext)Activator.CreateInstance(contextType, builder.Options)!;
-        // Design-time model: keeps everything (e.g. comments) that the read-optimized runtime model drops.
-        return context.GetService<Microsoft.EntityFrameworkCore.Metadata.IDesignTimeModel>().Model;
+        return (DbContext)Activator.CreateInstance(contextType, builder.Options)!;
     }
 
     private static MetadataReference[] LoadReferences()

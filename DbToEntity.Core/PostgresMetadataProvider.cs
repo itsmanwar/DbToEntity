@@ -108,12 +108,33 @@ namespace DbToEntity.Core
 
         private async Task LoadColumnsAsync(NpgsqlConnection conn, TableMetadata table)
         {
+            // pg_attribute rather than information_schema.columns, which omits materialized views. The result
+            // matches information_schema: domains resolve to their base type (udt_name/udt_schema), lengths
+            // match character_maximum_length (varchar/char: typmod - 4; bit/varbit: typmod).
             var query = @"
-                SELECT column_name, udt_name, is_nullable, character_maximum_length, column_default, udt_schema,
-                       col_description(format('%I.%I', table_schema, table_name)::regclass, ordinal_position)
-                FROM information_schema.columns
-                WHERE (@schema IS NULL OR table_schema = @schema) AND table_name = @table
-                ORDER BY ordinal_position
+                SELECT a.attname,
+                       base.typname,
+                       NOT (a.attnotnull OR (t.typtype = 'd' AND t.typnotnull)) AS is_nullable,
+                       CASE
+                           WHEN base.typname IN ('varchar', 'bpchar') AND COALESCE(NULLIF(a.atttypmod, -1), t.typtypmod) > 4
+                               THEN COALESCE(NULLIF(a.atttypmod, -1), t.typtypmod) - 4
+                           WHEN base.typname IN ('bit', 'varbit') AND COALESCE(NULLIF(a.atttypmod, -1), t.typtypmod) > 0
+                               THEN COALESCE(NULLIF(a.atttypmod, -1), t.typtypmod)
+                       END AS max_length,
+                       pg_get_expr(d.adbin, d.adrelid) AS column_default,
+                       base_ns.nspname,
+                       col_description(c.oid, a.attnum)
+                FROM pg_attribute a
+                JOIN pg_class c ON c.oid = a.attrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_type t ON t.oid = a.atttypid
+                JOIN pg_type base ON base.oid = CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END
+                JOIN pg_namespace base_ns ON base_ns.oid = base.typnamespace
+                LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                WHERE a.attnum > 0 AND NOT a.attisdropped
+                  AND (@schema IS NULL OR n.nspname = @schema)
+                  AND c.relname = @table
+                ORDER BY a.attnum
             ";
 
             using var cmd = new NpgsqlCommand(query, conn);
@@ -127,7 +148,7 @@ namespace DbToEntity.Core
                 {
                     Name = reader.GetString(0),
                     DataType = reader.GetString(1),
-                    IsNullable = reader.GetString(2) == "YES",
+                    IsNullable = reader.GetBoolean(2),
                     MaxLength = reader.IsDBNull(3) ? null : reader.GetInt32(3),
                     DefaultValue = reader.IsDBNull(4) ? null : reader.GetString(4),
                     TypeSchema = reader.GetString(5),
