@@ -60,6 +60,17 @@ namespace DbToEntity.Core.Models
         public List<string> TargetColumns { get; set; } = new();
         public string NavigationName { get; set; } = string.Empty; // Reference navigation on the source entity (set by EntityNaming)
         public string InverseNavigationName { get; set; } = string.Empty; // Collection navigation on the target entity (set by EntityNaming)
+        public ReferentialAction OnDelete { get; set; } = ReferentialAction.NoAction; // pg_constraint.confdeltype
+    }
+
+    /// <summary>PostgreSQL ON DELETE action. NoAction is the database default.</summary>
+    public enum ReferentialAction
+    {
+        NoAction,
+        Restrict,
+        Cascade,
+        SetNull,
+        SetDefault
     }
 
     public class IndexMetadata

@@ -194,7 +194,8 @@ namespace DbToEntity.Core
                       (SELECT array_to_string(array_agg(a.attname ORDER BY array_position(con.confkey, a.attnum)), ',')
                        FROM pg_attribute a
                        WHERE a.attrelid = con.confrelid AND a.attnum = ANY(con.confkey)
-                      ) AS target_columns
+                      ) AS target_columns,
+                      con.confdeltype
                   FROM pg_constraint con
                   JOIN pg_class c ON c.oid = con.conrelid
                   JOIN pg_namespace n ON n.oid = con.connamespace
@@ -219,7 +220,15 @@ namespace DbToEntity.Core
                     SourceColumns = reader.GetString(2).Split(',').ToList(),
                     TargetSchema = reader.GetString(3),
                     TargetTable = reader.GetString(4),
-                    TargetColumns = reader.GetString(5).Split(',').ToList()
+                    TargetColumns = reader.GetString(5).Split(',').ToList(),
+                    OnDelete = reader.GetChar(6) switch
+                    {
+                        'c' => ReferentialAction.Cascade,
+                        'n' => ReferentialAction.SetNull,
+                        'r' => ReferentialAction.Restrict,
+                        'd' => ReferentialAction.SetDefault,
+                        _ => ReferentialAction.NoAction // 'a'
+                    }
                 });
             }
         }

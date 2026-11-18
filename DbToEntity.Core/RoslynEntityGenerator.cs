@@ -426,8 +426,15 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                         .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
                              SimpleLambdaExpression(Parameter(Identifier("d")), fkLambdaExpr)))));
 
+                    // Always explicit: EF's convention for required FKs is Cascade, which would cascade on the client
+                    // even when the database says NO ACTION.
+                    var onDelete = InvocationExpression(
+                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasForeignKey, IdentifierName("OnDelete")))
+                       .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
+                           MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("DeleteBehavior"), IdentifierName(GetDeleteBehavior(fk.OnDelete)))))));
+
                     var hasConstraint = InvocationExpression(
-                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasForeignKey, IdentifierName("HasConstraintName")))
+                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, onDelete, IdentifierName("HasConstraintName")))
                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(fk.ConstraintName))))));
 
                     lambdaStatements.Add(ExpressionStatement(hasConstraint));
@@ -547,6 +554,20 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
         {
             return original.Pascalize();
         }
+
+        /// <summary>
+        /// Maps a Postgres ON DELETE action to the EF DeleteBehavior member name. NO ACTION follows EF's own
+        /// scaffolder (ClientSetNull). SET DEFAULT has no EF equivalent, so EF leaves tracked dependents alone
+        /// (NoAction) and the database applies the default.
+        /// </summary>
+        public static string GetDeleteBehavior(ReferentialAction action) => action switch
+        {
+            ReferentialAction.Cascade => "Cascade",
+            ReferentialAction.SetNull => "SetNull",
+            ReferentialAction.Restrict => "Restrict",
+            ReferentialAction.SetDefault => "NoAction",
+            _ => "ClientSetNull"
+        };
 
         private static string RequireName(string name, ForeignKeyMetadata fk)
         {

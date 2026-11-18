@@ -97,7 +97,8 @@ protected override void OnModelCreating(ModelBuilder modelBuilder)
         entity.ToTable("users", "public");
         entity.HasKey(e => e.Id).HasName("users_pkey");
         entity.Property(e => e.Email).HasColumnName("email").IsRequired().HasMaxLength(255);
-        entity.HasOne(d => d.Role).WithMany().HasForeignKey(d => d.RoleId);
+        entity.HasOne(d => d.Role).WithMany(p => p.Users).HasForeignKey(d => d.RoleId)
+            .OnDelete(DeleteBehavior.Restrict).HasConstraintName("fk_users_role");
     });
 }
 ```

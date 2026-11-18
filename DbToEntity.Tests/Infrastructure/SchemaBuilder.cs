@@ -79,7 +79,7 @@ public sealed class SchemaBuilder
         return view;
     }
 
-    public ForeignKeyMetadata ForeignKey(string constraintName, TableMetadata source, string[] sourceColumns, TableMetadata target, string[] targetColumns)
+    public ForeignKeyMetadata ForeignKey(string constraintName, TableMetadata source, string[] sourceColumns, TableMetadata target, string[] targetColumns, ReferentialAction onDelete = ReferentialAction.NoAction)
     {
         var fk = new ForeignKeyMetadata
         {
@@ -92,12 +92,13 @@ public sealed class SchemaBuilder
             TargetClassName = target.ClassName,
             TargetClassNamePlural = target.ClassName,
             TargetColumns = targetColumns.ToList(),
+            OnDelete = onDelete,
         };
         source.ForeignKeys.Add(fk);
         target.ReferencingForeignKeys.Add(fk);
         return fk;
     }
 
-    public ForeignKeyMetadata ForeignKey(string constraintName, TableMetadata source, string sourceColumn, TableMetadata target, string targetColumn = "id") =>
-        ForeignKey(constraintName, source, new[] { sourceColumn }, target, new[] { targetColumn });
+    public ForeignKeyMetadata ForeignKey(string constraintName, TableMetadata source, string sourceColumn, TableMetadata target, string targetColumn = "id", ReferentialAction onDelete = ReferentialAction.NoAction) =>
+        ForeignKey(constraintName, source, new[] { sourceColumn }, target, new[] { targetColumn }, onDelete);
 }
