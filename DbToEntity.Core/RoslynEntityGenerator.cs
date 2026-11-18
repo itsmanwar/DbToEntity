@@ -212,6 +212,14 @@ namespace DbToEntity.Core
             var namespaceDeclaration = NamespaceDeclaration(ParseName(namespaceName))
                 .AddMembers(classDeclaration);
 
+            // Enums and related entities in other namespaces (--separate-by-schema: <Schema>.Enums, <Schema>.Tables).
+            var enumUsings = table.Columns.Select(c => c.EnumType?.Namespace)
+                .Concat(table.ForeignKeys.Select(fk => fk.TargetNamespace))
+                .Concat(table.ReferencingForeignKeys.Select(fk => fk.SourceNamespace))
+                .Where(ns => !string.IsNullOrEmpty(ns) && ns != namespaceName)
+                .Distinct().OrderBy(ns => ns)
+                .Select(ns => UsingDirective(ParseName(ns!)));
+
             var cu = CompilationUnit()
                 .AddUsings(
                     UsingDirective(ParseName("System")),
@@ -219,6 +227,7 @@ namespace DbToEntity.Core
                     UsingDirective(ParseName("System.ComponentModel.DataAnnotations")),
                     UsingDirective(ParseName("System.ComponentModel.DataAnnotations.Schema")),
                     UsingDirective(ParseName("Microsoft.EntityFrameworkCore")))
+                .AddUsings(enumUsings.ToArray())
                 .AddMembers(namespaceDeclaration)
                 .NormalizeWhitespace().TightenNullForgiving()
                 .WithLeadingTrivia(GeneratedHeader);
@@ -345,6 +354,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
 
             var distinctNamespaces = tables
                 .Select(t => t.Namespace)
+                .Concat((enums ?? Array.Empty<EnumMetadata>()).Select(e => e.Namespace)) // ConfigureNpgsql's MapEnum<T>
                 .Where(n => !string.IsNullOrEmpty(n) && n != namespaceName)
                 .Distinct()
                 .OrderBy(n => n);
@@ -689,6 +699,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
             var contextNamespace = classNode.Ancestors().OfType<BaseNamespaceDeclarationSyntax>().FirstOrDefault()?.Name.ToString();
             var existingUsings = newRoot.Usings.Select(u => u.Name?.ToString()).ToHashSet();
             var newUsings = tablesToRefresh.Select(t => t.Namespace)
+                .Concat((enums ?? Array.Empty<EnumMetadata>()).Select(e => e.Namespace))
                 .Where(ns => !string.IsNullOrEmpty(ns) && ns != contextNamespace && !existingUsings.Contains(ns))
                 .Distinct().OrderBy(ns => ns)
                 .Select(ns => UsingDirective(ParseName(ns)));

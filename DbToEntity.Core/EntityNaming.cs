@@ -84,10 +84,12 @@ namespace DbToEntity.Core
         /// Sets <see cref="EnumMetadata.ClassName"/>. Enums whose names clash across schemas get a schema prefix;
         /// a clash with an entity class name gets an <c>Enum</c> suffix. Run before <see cref="TypeMapper.ResolveColumnTypes"/>.
         /// </summary>
-        public static void ResolveEnumNames(IEnumerable<EnumMetadata> enums, IEnumerable<TableMetadata> tables)
+        /// <param name="reserved">Namespace segments of the generated code; an enum named like one gets an <c>Enum</c> suffix.</param>
+        public static void ResolveEnumNames(IEnumerable<EnumMetadata> enums, IEnumerable<TableMetadata> tables, IReadOnlySet<string>? reserved = null)
         {
             var enumList = enums.ToList();
             var used = new HashSet<string>(tables.Select(t => t.ClassName));
+            if (reserved != null) used.UnionWith(reserved);
             var duplicates = enumList.GroupBy(e => SanitizeIdentifier(e.Name)).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
 
             foreach (var e in enumList.OrderBy(e => e.Schema).ThenBy(e => e.Name))

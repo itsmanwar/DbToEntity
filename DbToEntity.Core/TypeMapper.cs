@@ -141,6 +141,7 @@ namespace DbToEntity.Core
 
                     column.ClrType = column.IsNullable && mapping.IsValueType ? mapping.ClrType + "?" : mapping.ClrType;
                     column.IsValueType = mapping.IsValueType;
+                    column.EnumType = enums.FirstOrDefault(e => e.Schema == column.TypeSchema && (column.DataType == e.Name || column.DataType == "_" + e.Name));
                     column.ColumnType = mapping.ColumnType;
                 }
 

@@ -59,6 +59,11 @@ Status legend: ✅ fixed · 🔲 open
 - Found by the integration tests: a table named `it's` produced `class It's`, so the whole project failed to compile. The same applied to names with `-`, spaces, or a leading digit (`2fa_codes`).
 - **Fix:** class names (and fallback FK class names) go through `SanitizeIdentifier`, keeping the `_` prefix for leading digits.
 
+### 1.5d ✅ `--separate-by-schema` broke builds with cross-schema relationships or namespace-named types
+- Entities in different schema namespaces never imported each other, so any cross-schema FK (e.g. `sales.orders → public.users`) failed to compile. **Fix:** `ModelPipeline.AssignLocations` sets every table, enum and FK namespace before generation, and entity files import related entities' and enums' namespaces.
+- Found on a real ~500-table database: schema `message_queue` + table `message_queues` → class `MessageQueue`, shadowed by namespace `…MessageQueue` (CS0118). **Fix:** `ModelPipeline.ReservedNames` (root namespace parts; with separate-by-schema also schema folders and `Tables`/`Views`/`MaterializedViews`/`Enums`) → colliding classes get an `Entity` suffix, enums an `Enum` suffix, with a note; a `classNames` override to a reserved name is an error.
+- Enums now go to `<Schema>/Enums/` with a matching namespace (previously the output root). Old generated copies at the root are removed when moved.
+
 ### 1.6 🔲 Smaller issues
 - `SanitizeIdentifier` makes up a random name (`Property_xxxx`) when a column name has no valid characters. It isn't deterministic, so two calls give different names.
 - ✅ ~~Command handlers exit with code 0 on errors / raw stack traces~~ (Q5).
@@ -98,7 +103,7 @@ Status legend: ✅ fixed · 🔲 open
 ---
 
 ## 3. Upkeep and technical debt
-- ✅ **Tests:** `DbToEntity.Tests` (114 tests) covers name resolution, generate → compile → EF model, and **integration tests against a real PostgreSQL 17** (Testcontainers): every metadata query, plus real writes and reads through the generated `DbContext`. They also prove the `timestamp`/`jsonb` column-type fixes (removing them makes writes fail with Npgsql's real errors). Integration tests are skipped when Docker isn't running. Not covered: the CLI's file I/O (exercised manually).
+- ✅ **Tests:** `DbToEntity.Tests` (129 tests) covers name resolution, generate → compile → EF model, and **integration tests against a real PostgreSQL 17** (Testcontainers): every metadata query, plus real writes and reads through the generated `DbContext`. They also prove the `timestamp`/`jsonb` column-type fixes (removing them makes writes fail with Npgsql's real errors). Integration tests are skipped when Docker isn't running. Not covered: the CLI's file I/O (exercised manually).
 - **N+1 queries:** 4 round-trips per table. Load each kind of metadata in one query for all tables.
 - `System.CommandLine 2.0.0-beta4` is an old preview. The stable 2.x API is different.
 - ✅ Naming and folder-layout logic moved from `Program.cs` to Core (`ModelPipeline`, `IncrementalUpdate`). The CLI is now mostly I/O.

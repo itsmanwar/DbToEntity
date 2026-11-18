@@ -41,6 +41,7 @@ namespace DbToEntity.Core.Models
         public string ClrType { get; set; } = string.Empty; // e.g. "int?", "string", "Mood[]" (reference types never carry "?")
         public bool IsValueType { get; set; } // false: a nullable column is emitted as "T?" under #nullable enable
         public string? ColumnType { get; set; } // explicit HasColumnType value when Npgsql's default store type would differ
+        public EnumMetadata? EnumType { get; set; } // the enum (or enum array element) this column uses; drives usings
     }
 
     public class EnumMetadata
@@ -49,6 +50,7 @@ namespace DbToEntity.Core.Models
         public string Name { get; set; } = string.Empty;
         public List<string> Labels { get; set; } = new(); // in pg_enum.enumsortorder order
         public string ClassName { get; set; } = string.Empty; // set by EntityNaming.ResolveEnumNames
+        public string Namespace { get; set; } = string.Empty; // set by ModelPipeline.GetEnumLocation
     }
 
     public class ForeignKeyMetadata
@@ -66,6 +68,8 @@ namespace DbToEntity.Core.Models
         public string InverseNavigationName { get; set; } = string.Empty; // Collection navigation on the target entity (set by EntityNaming)
         public ReferentialAction OnDelete { get; set; } = ReferentialAction.NoAction; // pg_constraint.confdeltype
         public bool IsOneToOne { get; set; } // set by EntityNaming.ResolveNavigationNames: source columns are unique
+        public string SourceNamespace { get; set; } = string.Empty; // set by ModelPipeline.AssignLocations
+        public string TargetNamespace { get; set; } = string.Empty; // set by ModelPipeline.AssignLocations
     }
 
     /// <summary>PostgreSQL ON DELETE action. NoAction is the database default.</summary>

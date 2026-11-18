@@ -173,6 +173,31 @@ public class EndToEndIntegrationTests
         }
     }
 
+    // The whole real database with --separate-by-schema: cross-schema FKs (sales.orders -> users) and enums
+    // in <Schema>/Enums must still compile and work.
+    [DockerFact]
+    public async Task WholeDatabase_SeparateBySchema_CompilesAndReads()
+    {
+        var provider = new PostgresMetadataProvider();
+        var tables = await provider.GetTablesAsync(_db.ConnectionString, null);
+        var enums = await provider.GetEnumsAsync(_db.ConnectionString);
+        ModelPipeline.ExcludeTables(tables, null);
+        ModelPipeline.ResolveClassNames(tables);
+
+        var model = GeneratedModel.Build(tables, enums, separateBySchema: true);
+
+        Assert.Contains("Sales/Enums/OrderStatus.cs", model.Sources.Keys);
+        Assert.Contains("Enums/Mood.cs", model.Sources.Keys);
+        Assert.Contains("Sales/Tables/Order.cs", model.Sources.Keys);
+        Assert.Contains("Views/ActiveUser.cs", model.Sources.Keys);
+        Assert.Contains("MaterializedViews/RoleCount.cs", model.Sources.Keys);
+
+        await using var context = model.CreateContext(_db.ConnectionString);
+        All(context, model.ClrType("Order")); // enum column read through the moved enum type
+        Assert.Equal("Generated.Sales.Enums.OrderStatus", model.Entity("Order").FindProperty("Status")!.ClrType.FullName);
+        All(context, model.ClrType("User")); // query runs against the real tables
+    }
+
     [DockerFact]
     public async Task DeleteBehaviors_MatchTheDatabase()
     {

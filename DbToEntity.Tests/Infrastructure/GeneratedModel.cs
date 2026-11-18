@@ -41,28 +41,33 @@ public sealed class GeneratedModel
 
     /// <param name="userSources">Hand-written files compiled alongside the generated code (file name → C#),
     /// e.g. a partial DbContext implementing OnModelCreatingPartial.</param>
-    public static GeneratedModel Build(SchemaBuilder schema, Dictionary<string, string>? userSources = null, bool fluentOnly = false, bool pluralize = true) =>
-        Build(schema.Tables, schema.Enums, userSources, fluentOnly, pluralize);
+    public static GeneratedModel Build(SchemaBuilder schema, Dictionary<string, string>? userSources = null, bool fluentOnly = false, bool pluralize = true, bool separateBySchema = false) =>
+        Build(schema.Tables, schema.Enums, userSources, fluentOnly, pluralize, separateBySchema);
 
     /// <summary>Runs the same resolution pipeline as the CLI (enum names → column types → navigation names), then generates.</summary>
-    public static GeneratedModel Build(List<TableMetadata> tables, List<EnumMetadata>? enums = null, Dictionary<string, string>? userSources = null, bool fluentOnly = false, bool pluralize = true)
+    /// <param name="separateBySchema">Lay out namespaces like --separate-by-schema (DbContext stays in the root namespace).</param>
+    public static GeneratedModel Build(List<TableMetadata> tables, List<EnumMetadata>? enums = null, Dictionary<string, string>? userSources = null, bool fluentOnly = false, bool pluralize = true, bool separateBySchema = false)
     {
         enums ??= new List<EnumMetadata>();
         // Class names come from SchemaBuilder so tests control them; everything after is the CLI's pipeline.
-        var (_, warnings) = ModelPipeline.Prepare(tables, enums, pluralize);
+        var reserved = ModelPipeline.ReservedNames(tables, enums, Namespace, separateBySchema);
+        var (_, warnings) = ModelPipeline.Prepare(tables, enums, pluralize, reserved);
 
         var generator = new RoslynEntityGenerator(fluentOnly);
         var sources = new Dictionary<string, string>();
+        // Same layout step as the CLI; file keys are "<folder>/<file>" so the layout is visible to tests.
+        ModelPipeline.AssignLocations(tables, enums, "", Namespace, separateBySchema);
         foreach (var e in enums)
         {
-            var file = generator.GenerateEnum(e, Namespace);
-            sources[file.FileName] = file.Content;
+            var (dir, ns) = ModelPipeline.GetEnumLocation(e, "", Namespace, separateBySchema);
+            var file = generator.GenerateEnum(e, ns);
+            sources[Key(dir, file.FileName)] = file.Content;
         }
         foreach (var table in tables)
         {
-            table.Namespace = Namespace;
-            var file = generator.GenerateEntity(table, Namespace);
-            sources[file.FileName] = file.Content;
+            var (dir, ns) = ModelPipeline.GetLocation(table, "", Namespace, separateBySchema);
+            var file = generator.GenerateEntity(table, ns);
+            sources[Key(dir, file.FileName)] = file.Content;
         }
         var context = generator.GenerateDbContext(tables, Namespace, ContextName, enums: enums);
         sources[context.FileName] = context.Content;
@@ -70,6 +75,9 @@ public sealed class GeneratedModel
         var assembly = Compile(userSources == null ? sources : sources.Concat(userSources).ToDictionary());
         return new GeneratedModel { Sources = sources, Model = CreateModel(assembly), Warnings = warnings, Assembly = assembly };
     }
+
+    private static string Key(string directory, string fileName) =>
+        string.IsNullOrEmpty(directory) ? fileName : $"{directory.Replace('\\', '/')}/{fileName}";
 
     /// <summary>Compiles an arbitrary set of files (e.g. a project after an incremental update) and builds the model.</summary>
     public static GeneratedModel FromSources(Dictionary<string, string> sources)

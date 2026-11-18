@@ -124,12 +124,23 @@ protected override void OnModelCreating(ModelBuilder modelBuilder)
 }
 ```
 
-### Schema-based Folder Organization (v1.1.7+)
-Use `--separate-by-schema` to organize entities into subfolders based on their database schema:
--   `public.users` -> `./Entities/User.cs` (Namespace: `MyApp.Domain`)
--   `logs.audit_trail` -> `./Entities/Logs/AuditTrail.cs` (Namespace: `MyApp.Domain.Logs`)
+### Schema-based Folder Organization
+Use `--separate-by-schema` to organize generated code by database schema and kind. Folders and namespaces match:
 
-This keeps your project clean when dealing with large databases.
+```
+Entities/
+  AppDbContext.cs                      MyApp.Domain
+  Tables/User.cs                       MyApp.Domain.Tables            (public schema: no schema folder)
+  Views/ActiveUser.cs                  MyApp.Domain.Views
+  Enums/Mood.cs                        MyApp.Domain.Enums
+  Sales/Tables/Order.cs                MyApp.Domain.Sales.Tables
+  Sales/Enums/OrderStatus.cs           MyApp.Domain.Sales.Enums
+  Logs/MaterializedViews/DailyStat.cs  MyApp.Domain.Logs.MaterializedViews
+```
+
+-   Generated files import the namespaces they need, including entities and enums from other schemas.
+-   A class or enum that would have the same name as one of these namespaces (e.g. table `message_queue.message_queues` → `MessageQueue`, also the schema's namespace) is renamed with an `Entity`/`Enum` suffix, and the tool tells you. Use `classNames` in `db2entity.json` to pick another name.
+-   Enum files generated earlier at the root of the output folder are moved automatically.
 
 ### Intelligent Naming
 Uses `Humanizer` to ensure C# conventions:

@@ -22,8 +22,12 @@ namespace DbToEntity.Core
         /// <param name="singularize">False keeps the table name's number (--no-pluralize): users → Users.</param>
         /// <param name="overrides">Explicit class names keyed by "table" or "schema.table" (db2entity.json
         /// <c>classNames</c>). Throws <see cref="SettingsException"/> for invalid or clashing names.</param>
-        public static void ResolveClassNames(List<TableMetadata> tables, bool singularize = true, IReadOnlyDictionary<string, string>? overrides = null)
+        /// <param name="reserved">Namespace segments of the generated code (<see cref="ReservedNames"/>). A class
+        /// with such a name would be shadowed by the namespace, so it gets an <c>Entity</c> suffix.</param>
+        /// <returns>A note per class renamed because of <paramref name="reserved"/>.</returns>
+        public static List<string> ResolveClassNames(List<TableMetadata> tables, bool singularize = true, IReadOnlyDictionary<string, string>? overrides = null, IReadOnlySet<string>? reserved = null)
         {
+            var notes = new List<string>();
             // SanitizeIdentifier: table names may contain characters C# doesn't allow (e.g. "it's", "order-items").
             string BaseName(TableMetadata t)
             {
@@ -38,7 +42,20 @@ namespace DbToEntity.Core
                 table.ClassName = duplicates.Contains(baseName) ? table.Schema.Pascalize() + baseName : baseName;
             }
 
-            if (overrides == null || overrides.Count == 0) return;
+            if (reserved != null && reserved.Count > 0)
+            {
+                var taken = new HashSet<string>(tables.Select(t => t.ClassName));
+                foreach (var table in tables.Where(t => reserved.Contains(t.ClassName)))
+                {
+                    var name = table.ClassName + "Entity";
+                    for (var i = 2; taken.Contains(name) || reserved.Contains(name); i++) name = table.ClassName + "Entity" + i;
+                    notes.Add($"Class for {table.Schema}.{table.Name} renamed to {name}: '{table.ClassName}' is also a namespace in the generated code. Set classNames in {GeneratorSettings.DefaultFileName} to choose another name.");
+                    taken.Add(name);
+                    table.ClassName = name;
+                }
+            }
+
+            if (overrides == null || overrides.Count == 0) return notes;
 
             foreach (var table in tables)
             {
@@ -47,12 +64,33 @@ namespace DbToEntity.Core
                     continue;
                 if (!Microsoft.CodeAnalysis.CSharp.SyntaxFacts.IsValidIdentifier(name))
                     throw new SettingsException($"classNames: '{name}' (for table {table.Schema}.{table.Name}) is not a valid C# class name.");
+                if (reserved != null && reserved.Contains(name))
+                    throw new SettingsException($"classNames: '{name}' (for table {table.Schema}.{table.Name}) is also a namespace in the generated code, so it can't be used as a class name.");
                 table.ClassName = name;
             }
 
             var clash = tables.GroupBy(t => t.ClassName).FirstOrDefault(g => g.Count() > 1);
             if (clash != null)
                 throw new SettingsException($"classNames: class name '{clash.Key}' is used by more than one table ({string.Join(", ", clash.Select(t => $"{t.Schema}.{t.Name}"))}).");
+            return notes;
+        }
+
+        /// <summary>
+        /// Every namespace segment the generated code will declare: the root namespace's parts and, with
+        /// --separate-by-schema, each schema folder plus Tables/Views/MaterializedViews/Enums. A type with one of
+        /// these names is shadowed by the namespace inside the generated files (CS0118), so class and enum
+        /// naming avoids them.
+        /// </summary>
+        public static HashSet<string> ReservedNames(IEnumerable<TableMetadata> tables, IEnumerable<EnumMetadata> enums, string rootNamespace, bool separateBySchema)
+        {
+            var names = new HashSet<string>(rootNamespace.Split('.', StringSplitOptions.RemoveEmptyEntries));
+            if (!separateBySchema) return names;
+
+            names.UnionWith(new[] { "Tables", "Views", "MaterializedViews", "Enums" });
+            names.UnionWith(tables.Select(t => t.Schema).Concat(enums.Select(e => e.Schema))
+                .Where(s => !string.IsNullOrEmpty(s) && s != "public")
+                .Select(s => s.Pascalize()));
+            return names;
         }
 
         /// <summary>Tables that are never generated unless requested by name: EF Core's migration history.</summary>
@@ -92,9 +130,9 @@ namespace DbToEntity.Core
         /// warnings produced (e.g. skipped columns of unsupported types).
         /// </summary>
         /// <param name="pluralize">False (--no-pluralize) keeps DbSet and collection names unpluralized.</param>
-        public static (List<EnumMetadata> UsedEnums, List<string> Warnings) Prepare(List<TableMetadata> tables, List<EnumMetadata> enums, bool pluralize = true)
+        public static (List<EnumMetadata> UsedEnums, List<string> Warnings) Prepare(List<TableMetadata> tables, List<EnumMetadata> enums, bool pluralize = true, IReadOnlySet<string>? reserved = null)
         {
-            EntityNaming.ResolveEnumNames(enums, tables);
+            EntityNaming.ResolveEnumNames(enums, tables, reserved);
             var warnings = TypeMapper.ResolveColumnTypes(tables, enums);
             ResolveForeignKeyClassNames(tables);
             EntityNaming.ResolveNavigationNames(tables, pluralize);
@@ -172,6 +210,54 @@ namespace DbToEntity.Core
             }
 
             table.Namespace = ns;
+            return (directory, ns);
+        }
+
+        /// <summary>
+        /// Assigns the namespace of every table and enum, and the source/target namespaces of every FK, so each
+        /// generated file can import the namespaces of the entities and enums it references. Must run before any
+        /// file is generated: with --separate-by-schema an entity may reference a class in another namespace.
+        /// </summary>
+        public static void AssignLocations(List<TableMetadata> tables, IEnumerable<EnumMetadata> enums, string outputDirectory, string rootNamespace, bool separateBySchema)
+        {
+            foreach (var table in tables) GetLocation(table, outputDirectory, rootNamespace, separateBySchema);
+            foreach (var enumType in enums) GetEnumLocation(enumType, outputDirectory, rootNamespace, separateBySchema);
+
+            var principalByFk = tables.SelectMany(t => t.ReferencingForeignKeys.Select(fk => (fk, t))).ToDictionary(x => x.fk, x => x.t);
+            foreach (var table in tables)
+            {
+                foreach (var fk in table.ForeignKeys)
+                {
+                    fk.SourceNamespace = table.Namespace;
+                    fk.TargetNamespace = principalByFk.TryGetValue(fk, out var principal) ? principal.Namespace : string.Empty;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Folder and namespace for an enum file. With <paramref name="separateBySchema"/> enums mirror the
+        /// table layout: <c>&lt;output&gt;/&lt;Schema&gt;/Enums/</c> (no schema folder for public); otherwise they
+        /// sit next to the entities. Also stores the namespace on the enum for usings.
+        /// </summary>
+        public static (string Directory, string Namespace) GetEnumLocation(EnumMetadata enumType, string outputDirectory, string rootNamespace, bool separateBySchema)
+        {
+            var directory = outputDirectory;
+            var ns = rootNamespace;
+
+            if (separateBySchema)
+            {
+                if (!string.IsNullOrEmpty(enumType.Schema) && enumType.Schema != "public")
+                {
+                    var schemaFolder = enumType.Schema.Pascalize();
+                    directory = Path.Combine(directory, schemaFolder);
+                    ns = $"{ns}.{schemaFolder}";
+                }
+
+                directory = Path.Combine(directory, "Enums");
+                ns = $"{ns}.Enums";
+            }
+
+            enumType.Namespace = ns;
             return (directory, ns);
         }
     }
