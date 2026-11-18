@@ -36,7 +36,8 @@ Status legend: ✅ fixed · 🔲 open
 - ✅ ~~Partitioned tables get no indexes~~: the index query now includes `relkind` `'p'` and `'m'`. *(Not yet run against a real database.)*
 - ✅ ~~Composite index column order isn't guaranteed~~: ordered by position in `indkey`. *(Not yet run against a real database.)*
 - Expression indexes are silently dropped, and partial indexes are written as full indexes (no `HasFilter`). `IndexMetadata.IsPartial`/`HasExpressions` are now read, but only used for one-to-one detection.
-- **FKs that reference a unique non-PK column** (alternate key) get no `HasPrincipalKey(...)`, so EF assumes they point at the principal's primary key. That gives wrong mappings, or type-mismatch errors at model build.
+- ✅ ~~FKs that reference a unique non-PK column get no `HasPrincipalKey`~~: EF threw at model build ("cannot target the primary key … not compatible"), so the app crashed at startup. The generator now emits `HasPrincipalKey(...)` (or `HasPrincipalKey<T>` for one-to-one) whenever the target columns aren't the principal's PK in the same order, and keeps the `confkey` column pairing.
+  - **Limitation:** if the referenced unique column is nullable, EF makes the alternate key required, so a principal row with NULL there can't be saved through EF. EF can't model this; it's covered by a test.
 - **FK target matching ignores schema** (`PostgresMetadataProvider.cs:77-89`, name-only `HashSet` / `FirstOrDefault`). Two schemas with the same table name can attach FKs to the wrong table.
 
 ### 1.5 ✅ Unknown Postgres types became `object`
@@ -86,7 +87,7 @@ Status legend: ✅ fixed · 🔲 open
 ---
 
 ## 3. Upkeep and technical debt
-- ✅ **Tests added:** `DbToEntity.Tests` (41 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
+- ✅ **Tests added:** `DbToEntity.Tests` (47 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
 - **N+1 queries:** 4 round-trips per table. Load each kind of metadata in one query for all tables.
 - `System.CommandLine 2.0.0-beta4` is an old preview. The stable 2.x API is different.
 - `Program.cs` mixes command wiring with naming and folder-layout logic. That logic should live in Core so it can be tested.

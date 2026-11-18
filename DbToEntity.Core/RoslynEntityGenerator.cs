@@ -272,6 +272,11 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                 classDeclaration = classDeclaration.AddMembers(CreateConfigureNpgsqlMethod(dbContextName, enums));
             }
 
+            // The provider puts the same FK instance in the principal's ReferencingForeignKeys.
+            var principalByFk = tables
+                .SelectMany(t => t.ReferencingForeignKeys.Select(fk => (fk, t)))
+                .ToDictionary(x => x.fk, x => x.t);
+
             var statements = new List<StatementSyntax>();
             statements.Add(ExpressionStatement(
                 InvocationExpression(
@@ -431,6 +436,26 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                         MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, withMany, hasForeignKeyName))
                         .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
                              SimpleLambdaExpression(Parameter(Identifier("d")), fkLambdaExpr)))));
+
+                    // EF assumes an FK targets the principal's primary key. When the constraint references other
+                    // columns (a unique constraint), name them, keeping confkey order so pairs line up.
+                    if (principalByFk.TryGetValue(fk, out var principal) && !principal.PrimaryKeys.SequenceEqual(fk.TargetColumns))
+                    {
+                        var principalProps = fk.TargetColumns.Select(c => EntityNaming.GetPropertyName(c, principal.ClassName)).ToList();
+                        ExpressionSyntax principalLambdaBody = principalProps.Count == 1
+                            ? MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("p"), IdentifierName(principalProps[0]))
+                            : AnonymousObjectCreationExpression(SeparatedList(principalProps.Select(prop => AnonymousObjectMemberDeclarator(
+                                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("p"), IdentifierName(prop))))));
+
+                        SimpleNameSyntax hasPrincipalKeyName = fk.IsOneToOne
+                            ? GenericName(Identifier("HasPrincipalKey")).WithTypeArgumentList(TypeArgumentList(SingletonSeparatedList(ParseTypeName(principal.ClassName))))
+                            : IdentifierName("HasPrincipalKey");
+
+                        hasForeignKey = InvocationExpression(
+                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasForeignKey, hasPrincipalKeyName))
+                            .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
+                                SimpleLambdaExpression(Parameter(Identifier("p")), principalLambdaBody)))));
+                    }
 
                     // Always explicit: EF's convention for required FKs is Cascade, which would cascade on the client
                     // even when the database says NO ACTION.
