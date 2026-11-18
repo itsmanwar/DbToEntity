@@ -45,6 +45,8 @@ namespace DbToEntity.Core.Models
         public string TargetClassName { get; set; } = string.Empty; // Resolved class name
         public string TargetClassNamePlural { get; set; } = string.Empty; // Resolved plural name
         public List<string> TargetColumns { get; set; } = new();
+        public string NavigationName { get; set; } = string.Empty; // Reference navigation on the source entity (set by EntityNaming)
+        public string InverseNavigationName { get; set; } = string.Empty; // Collection navigation on the target entity (set by EntityNaming)
     }
 
     public class IndexMetadata

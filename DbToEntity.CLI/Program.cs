@@ -3,6 +3,7 @@ using System.CommandLine;
 using System.IO;
 using System.Threading.Tasks;
 using DbToEntity.Core;
+using DbToEntity.Core.Models;
 using System.Collections.Generic;
 using Microsoft.Extensions.Configuration;
 using System.Linq;
@@ -137,70 +138,8 @@ namespace DbToEntity.CLI
                 }
             }
 
-            // 2.1 Propagate Class Names to Foreign Keys
-            // Create lookup (Schema.Table -> ClassName)
-            // Note: Postgres is case sensitive for values usually, but our names might be. 
-            // We use simple matching assuming standard lowercase/exact match from metadata.
-            var tableNameToClass = tables.ToDictionary(t => $"{t.Schema}.{t.Name}", t => t);
-
-            foreach (var table in tables)
-            {
-                foreach (var fk in table.ForeignKeys)
-                {
-                    var key = $"{fk.TargetSchema}.{fk.TargetTable}";
-                    if (tableNameToClass.TryGetValue(key, out var targetTable))
-                    {
-                        fk.TargetClassName = targetTable.ClassName;
-                        fk.TargetClassNamePlural = targetTable.ClassName.Pluralize();
-                    }
-                    else
-                    {
-                        // Fallback if target not in generated set (should fit filtering logic, but safety first)
-                        fk.TargetClassName = fk.TargetTable.Singularize().Pascalize();
-                        fk.TargetClassNamePlural = fk.TargetClassName.Pluralize();
-                    }
-                }
-
-                foreach (var fk in table.ReferencingForeignKeys)
-                {
-                    // Find the source table (the one that has this FK) to get its resolved ClassName
-                    // Note: SourceTable name in FK metadata is raw table name.
-                    // We must find the table in our generated list that matches schema/table.
-                    // BUT: ForeignKeyMetadata does not have SourceSchema! It only has SourceTable.
-                    // This is a flaw in previous implementation of MetadataProvider.
-                    // However, we can assume unique table names globally OR try to strict match if we had schema.
-                    // Since we don't have SourceSchema, we have to rely on SourceTable name.
-                    // If multiple schemas have same table name, we might pick wrong one?
-                    // YES. This is a risk.
-                    // But typically FKs are loaded from constraint info which has schema. 
-                    // Let's check MetadataProvider.LoadForeignKeysAsync...
-                    // It selects `kcu.table_name`. 
-                    // WE SHOULD HAVE ADDED SourceSchema to ForeignKeyMetadata.
-
-                    // QUICK FIX: 
-                    // Iterate all tables, find one where Name == fk.SourceTable AND it contains this FK instance (or equivalent).
-                    // Actually, ReferencingForeignKeys contains the EXACT SAME object instance as in the source table's ForeignKeys list 
-                    // IF we linked them by reference in MetadataProvider.
-                    // Let's check PostgresMetadataProvider.GetTablesAsync.
-                    // "targetTable.ReferencingForeignKeys.Add(fk);" -> It adds the same object.
-                    // So we can find the table that contains this specific object in its ForeignKeys list.
-
-                    var sourceTable = tables.FirstOrDefault(t => t.ForeignKeys.Contains(fk));
-                    if (sourceTable != null)
-                    {
-                        fk.SourceClassName = sourceTable.ClassName;
-                    }
-                    else
-                    {
-                        // Fallback: If source table is not in the generation list (e.g. partial generation),
-                        // we fall back to algorithmic naming.
-                        fk.SourceClassName = fk.SourceTable.Singularize().Pascalize();
-                    }
-                }
-            }
-
-            // For Inverse Props, we need SourceClassName in FK Metadata?
-            // Let's add SourceClassName to metadata too.
+            // 2.1 Propagate class names to foreign keys and resolve navigation names
+            ResolveForeignKeyNames(tables);
 
             // 3. Generate Code
             IEntityGenerator generator = new RoslynEntityGenerator();
@@ -286,6 +225,8 @@ namespace DbToEntity.CLI
                 }
             }
 
+            ResolveForeignKeyNames(tables);
+
             // 3. Regenerate Entities
             foreach (var table in tables)
             {
@@ -331,6 +272,41 @@ namespace DbToEntity.CLI
 
             Console.WriteLine("Update complete.");
         }
+
+        // Fills Target/Source class names on every FK from the resolved table class names, then
+        // assigns navigation names. Must run after TableMetadata.ClassName is set.
+        static void ResolveForeignKeyNames(List<TableMetadata> tables)
+        {
+            var tableByQualifiedName = tables.ToDictionary(t => $"{t.Schema}.{t.Name}", t => t);
+
+            foreach (var table in tables)
+            {
+                foreach (var fk in table.ForeignKeys)
+                {
+                    if (tableByQualifiedName.TryGetValue($"{fk.TargetSchema}.{fk.TargetTable}", out var targetTable))
+                    {
+                        fk.TargetClassName = targetTable.ClassName;
+                    }
+                    else
+                    {
+                        // Target not in the loaded set: fall back to algorithmic naming
+                        fk.TargetClassName = fk.TargetTable.Singularize().Pascalize();
+                    }
+                    fk.TargetClassNamePlural = fk.TargetClassName.Pluralize();
+                }
+
+                foreach (var fk in table.ReferencingForeignKeys)
+                {
+                    // The provider adds the same FK instance to the source's ForeignKeys and the target's
+                    // ReferencingForeignKeys, so identity lookup finds the source table across schemas.
+                    var sourceTable = tables.FirstOrDefault(t => t.ForeignKeys.Contains(fk));
+                    fk.SourceClassName = sourceTable?.ClassName ?? fk.SourceTable.Singularize().Pascalize();
+                }
+            }
+
+            EntityNaming.ResolveNavigationNames(tables);
+        }
+
         static string GetConnectionString(string providedConnection)
         {
             if (!string.IsNullOrEmpty(providedConnection)) return providedConnection;

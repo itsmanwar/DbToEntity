@@ -47,7 +47,7 @@ namespace DbToEntity.Core
                 // Columns
                 foreach (var col in index.Columns)
                 {
-                    indexArgs.Add(AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(SanitizeIdentifier(col)))));
+                    indexArgs.Add(AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(EntityNaming.GetPropertyName(col, className)))));
                 }
 
                 // Name
@@ -72,8 +72,7 @@ namespace DbToEntity.Core
             foreach (var col in table.Columns)
             {
                 var typeName = TypeMapper.Map(col.DataType, col.IsNullable);
-                var propName = SanitizeIdentifier(col.Name);
-                if (propName == className) propName += "Member";
+                var propName = EntityNaming.GetPropertyName(col.Name, className);
                 var attributes = new List<AttributeSyntax>();
 
                 // [Column("name")]
@@ -114,91 +113,27 @@ namespace DbToEntity.Core
                 properties.Add(property);
             }
 
-            // Navigation Properties
-            // Navigation Properties
-            // Group FKs by target type to detect collisions (multiple FKs to same table)
-            var fkGroups = table.ForeignKeys.GroupBy(fk => fk.TargetClassName).ToDictionary(g => g.Key, g => g.ToList());
-
+            // Navigation properties. Names come from EntityNaming.ResolveNavigationNames so they
+            // match the fluent configuration emitted by GenerateDbContext.
             foreach (var fk in table.ForeignKeys)
             {
-                var targetClassName = fk.TargetClassName;
-                var sourceProps = fk.SourceColumns.Select(c => SanitizeIdentifier(c)).ToList();
-                var sourcePropNameString = string.Join(", ", sourceProps);
+                var sourcePropNameString = string.Join(", ", fk.SourceColumns.Select(c => EntityNaming.GetPropertyName(c, className)));
 
-                string navPropName;
-                bool isMultiple = fkGroups.ContainsKey(targetClassName) && fkGroups[targetClassName].Count > 1;
-
-                if (isMultiple)
+                var attributes = new List<AttributeSyntax>
                 {
-                    // Disambiguate using FK column name
-                    // e.g. PhotoFileId -> PhotoFile
-                    var baseName = sourceProps.First();
-                    if (baseName.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
-                        baseName = baseName.Substring(0, baseName.Length - 2);
+                    Attribute(IdentifierName("ForeignKey"),
+                        AttributeArgumentList(SingletonSeparatedList(
+                            AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(sourcePropNameString))))))
+                };
 
-                    navPropName = baseName;
-
-                    // Fallback if still ambiguous (very unlikely unless composite keys overlap weirdly) or if name matches Type name exactly?
-                    // Actually, matching Type name is fine: public UploadedFile UploadedFile { get; set; }
-                    // But here we want distinct names.
-                }
-                else
+                if (!string.IsNullOrEmpty(fk.InverseNavigationName))
                 {
-                    navPropName = targetClassName;
-                }
-
-                // Avoid collision with property names (columns) or enclosing class name
-                if (sourceProps.Contains(navPropName) || properties.OfType<PropertyDeclarationSyntax>().Any(p => p.Identifier.Text == navPropName) || navPropName == className)
-                {
-                    navPropName += "Nav";
-                }
-
-                var attributes = new List<AttributeSyntax>();
-
-                // [ForeignKey("...")]
-                attributes.Add(Attribute(IdentifierName("ForeignKey"),
-                    AttributeArgumentList(SingletonSeparatedList(
-                        AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(sourcePropNameString)))))));
-
-                // [InverseProperty("...")]
-                // Only needed if there are multiple relationships between these two tables.
-                // We check if the TARGET table has multiple FKs pointing back to US (Source).
-                // But simplified: Always add InverseProperty if we are in a "Multiple" scenario to be safe and explicit.
-                // We need to know what the Inverse Collection is named on Duplicate scenarios.
-                // Inverse naming logic: SourceClassName + (Multiple ? FKColumnBase : "") + "s"
-
-                // We need to simulate the Inverse naming logic here.
-                // Note: The Inverse logic runs on the TARGET table generation.
-                // Here we are generating the SOURCE table.
-                // We assume the Target table generation follows the same deterministic logic.
-                // Inverse Logic Ref:
-                // Group referencing FKs by SourceClassName.
-                // If count > 1: Name = SourceClassName + FKColumnBase + "s" (e.g. PensionerPhotoFiles)
-                // Else: Name = SourceClassNamePlural (e.g. Pensioners)
-
-                // So checking if THIS specific relationship is part of a "Multiple from Source" group on the Target.
-                // Ideally we'd look at ReferencingForeignKeys of the Target table... but we don't have TargetTable metadata here fully populated with Referencing FKs of *other* tables?
-                // Wait, `ReferencingForeignKeys` on table metadata objects are populated in `Program.cs`.
-                // However, do we have access to `fk.TargetTable` metadata object?
-                // `fk` is `ForeignKeyMetadata`. It has string `TargetTable`.
-                // It does NOT have reference to the full `TableMetadata` object of the target.
-                // This makes it hard to know if the Target table sees "multiple" from us.
-
-                // Assumption: If WE have multiple FKs to Target, Target likely has multiple Inverse FKs from US.
-                // So `isMultiple` here is a good proxy.
-                if (isMultiple)
-                {
-                    var baseName = sourceProps.First();
-                    if (baseName.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
-                        baseName = baseName.Substring(0, baseName.Length - 2);
-
-                    var inversePropName = table.ClassName + baseName.Pluralize(); // e.g. PensionerPhotoFiles
                     attributes.Add(Attribute(IdentifierName("InverseProperty"),
-                       AttributeArgumentList(SingletonSeparatedList(
-                           AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(inversePropName)))))));
+                        AttributeArgumentList(SingletonSeparatedList(
+                            AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(fk.InverseNavigationName)))))));
                 }
 
-                var navProperty = PropertyDeclaration(ParseTypeName(targetClassName), navPropName)
+                var navProperty = PropertyDeclaration(ParseTypeName(fk.TargetClassName), RequireName(fk.NavigationName, fk))
                     .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.VirtualKeyword))
                     .AddAttributeLists(AttributeList(SeparatedList(attributes)))
                     .AddAccessorListAccessors(
@@ -208,75 +143,18 @@ namespace DbToEntity.Core
                 properties.Add(navProperty);
             }
 
-            // Inverse Navigation Properties (Collections)
-            // Group FKs by source type to detect collisions
-            var refFkGroups = table.ReferencingForeignKeys.GroupBy(fk => fk.SourceClassName).ToDictionary(g => g.Key, g => g.ToList());
-
+            // Inverse navigation properties (collections)
             foreach (var fk in table.ReferencingForeignKeys)
             {
-                var sourceClassName = fk.SourceClassName;
-                var sourceProps = fk.SourceColumns.Select(c => SanitizeIdentifier(c)).ToList();
-
-                string propName;
-                bool isMultiple = refFkGroups.ContainsKey(sourceClassName) && refFkGroups[sourceClassName].Count > 1;
-
-                if (isMultiple)
-                {
-                    // e.g. PensionerPhotoFiles
-                    var baseName = sourceProps.First();
-                    if (baseName.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
-                        baseName = baseName.Substring(0, baseName.Length - 2);
-
-                    propName = sourceClassName + baseName.Pluralize();
-                }
-                else
-                {
-                    propName = sourceClassName.Pluralize();
-                }
-
-                // Avoid duplicate names if property already exists
-                if (properties.OfType<PropertyDeclarationSyntax>().Any(p => p.Identifier.Text == propName))
-                {
-                    propName += "Collection";
-                }
-
-                var collectionType = $"ICollection<{sourceClassName}>";
-
-                var attributes = new List<AttributeSyntax>();
-
-                if (isMultiple)
-                {
-                    // Inverse needs to point to the Forward Nav name.
-                    // Forward Nav Name Logic:
-                    // If multiple: FKColumnBase (e.g. PhotoFile) (from source table perspective)
-                    // If single: TargetClassName (which is US, so "UploadedFile")
-
-                    // Here we are on Target (UploadedFile).
-                    // The Source (Pensioner) has the FK.
-                    // So Source used `isMultiple` logic on its side.
-                    // Since we detected `isMultiple` here (multiple FKs from Pensioner), it implies Source also has multiple FKs to US.
-                    // So Source used FKColumnBase naming.
-
-                    var baseName = sourceProps.First();
-                    if (baseName.EndsWith("Id", StringComparison.OrdinalIgnoreCase))
-                        baseName = baseName.Substring(0, baseName.Length - 2);
-
-                    attributes.Add(Attribute(IdentifierName("InverseProperty"),
-                       AttributeArgumentList(SingletonSeparatedList(
-                           AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(baseName)))))));
-                }
-
-                var collectionProperty = PropertyDeclaration(ParseTypeName(collectionType), propName)
-                    .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.VirtualKeyword));
-
-                if (attributes.Any())
-                {
-                    collectionProperty = collectionProperty.AddAttributeLists(AttributeList(SeparatedList(attributes)));
-                }
-
-                collectionProperty = collectionProperty.AddAccessorListAccessors(
-                       AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
-                       AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
+                var collectionProperty = PropertyDeclaration(ParseTypeName($"ICollection<{fk.SourceClassName}>"), RequireName(fk.InverseNavigationName, fk))
+                    .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.VirtualKeyword))
+                    .AddAttributeLists(AttributeList(SingletonSeparatedList(
+                        Attribute(IdentifierName("InverseProperty"),
+                            AttributeArgumentList(SingletonSeparatedList(
+                                AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(RequireName(fk.NavigationName, fk))))))))))
+                    .AddAccessorListAccessors(
+                        AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
+                        AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
 
                 properties.Add(collectionProperty);
             }
@@ -293,6 +171,7 @@ namespace DbToEntity.Core
             var cu = CompilationUnit()
                 .AddUsings(
                     UsingDirective(ParseName("System")),
+                    UsingDirective(ParseName("System.Collections.Generic")), // ICollection<> (don't rely on ImplicitUsings)
                     UsingDirective(ParseName("System.ComponentModel.DataAnnotations")),
                     UsingDirective(ParseName("System.ComponentModel.DataAnnotations.Schema")),
                     UsingDirective(ParseName("Microsoft.EntityFrameworkCore")))
@@ -378,7 +257,7 @@ namespace DbToEntity.Core
                 // .HasKey(e => e.Id) or .HasNoKey()
                 if (table.PrimaryKeys.Any())
                 {
-                    var keyProps = table.PrimaryKeys.Select(k => SanitizeIdentifier(k));
+                    var keyProps = table.PrimaryKeys.Select(k => EntityNaming.GetPropertyName(k, className));
                     ExpressionSyntax keyExpression;
                     if (keyProps.Count() == 1)
                     {
@@ -418,8 +297,7 @@ namespace DbToEntity.Core
                 // Properties
                 foreach (var col in table.Columns)
                 {
-                    var propName = SanitizeIdentifier(col.Name);
-                    if (propName == className) propName += "Member";
+                    var propName = EntityNaming.GetPropertyName(col.Name, className);
                     var propertyAccess = InvocationExpression(
                         MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("Property")))
                         .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(
@@ -458,10 +336,8 @@ namespace DbToEntity.Core
                 // Relationships
                 foreach (var fk in table.ForeignKeys)
                 {
-                    var navPropName = fk.TargetClassName; // Use resolved name
-                    var sourceProps = fk.SourceColumns.Select(c => SanitizeIdentifier(c)).ToList();
-
-                    if (sourceProps.Contains(navPropName)) navPropName += "Nav";
+                    var navPropName = RequireName(fk.NavigationName, fk);
+                    var sourceProps = fk.SourceColumns.Select(c => EntityNaming.GetPropertyName(c, className)).ToList();
 
                     var hasOne = InvocationExpression(
                         MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("HasOne")))
@@ -469,8 +345,17 @@ namespace DbToEntity.Core
                              SimpleLambdaExpression(Parameter(Identifier("d")),
                                 MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("d"), IdentifierName(navPropName)))))));
 
+                    // .WithMany(p => p.Inverse) pairs the reference with its collection; a bare
+                    // .WithMany() would leave the collection to be matched by convention as a second relationship.
+                    var withManyArgs = string.IsNullOrEmpty(fk.InverseNavigationName)
+                        ? ArgumentList()
+                        : ArgumentList(SingletonSeparatedList(Argument(
+                            SimpleLambdaExpression(Parameter(Identifier("p")),
+                                MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("p"), IdentifierName(fk.InverseNavigationName))))));
+
                     var withMany = InvocationExpression(
-                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasOne, IdentifierName("WithMany")));
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasOne, IdentifierName("WithMany")))
+                        .WithArgumentList(withManyArgs);
 
                     ExpressionSyntax fkLambdaExpr;
                     if (sourceProps.Count == 1)
@@ -611,19 +496,12 @@ namespace DbToEntity.Core
             return original.Pascalize();
         }
 
-        private string SanitizeIdentifier(string name)
+        private static string RequireName(string name, ForeignKeyMetadata fk)
         {
-            // 1. Replace invalid chars with underscore (keep alphanumeric)
-            var clean = Regex.Replace(name, @"[^a-zA-Z0-9_]", "_");
-
-            // 2. Pascalize (handles underscores by Capitalizing next char)
-            var pascal = clean.Pascalize();
-
-            // 3. Ensure valid start
-            if (string.IsNullOrEmpty(pascal)) return "Property_" + System.Guid.NewGuid().ToString("N").Substring(0, 4); // Fallback
-            if (char.IsDigit(pascal[0])) return "_" + pascal;
-
-            return pascal;
+            if (string.IsNullOrEmpty(name))
+                throw new InvalidOperationException(
+                    $"Navigation names for FK '{fk.ConstraintName}' are not resolved. Call EntityNaming.ResolveNavigationNames before generating.");
+            return name;
         }
     }
 }
