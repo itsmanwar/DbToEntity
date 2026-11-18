@@ -114,6 +114,7 @@ namespace DbToEntity.CLI
             // 1. Get Metadata
             IPostgresMetadataProvider metadataProvider = new PostgresMetadataProvider();
             var tables = await metadataProvider.GetTablesAsync(config.ConnectionString, config.Schema, config.IncludedTables.Count > 0 ? config.IncludedTables : null);
+            var enums = await metadataProvider.GetEnumsAsync(config.ConnectionString);
 
             Console.WriteLine($"Found {tables.Count} tables.");
 
@@ -139,7 +140,7 @@ namespace DbToEntity.CLI
             }
 
             // 2.1 Propagate class names to foreign keys and resolve navigation names
-            ResolveForeignKeyNames(tables);
+            var usedEnums = ResolveTypesAndNames(tables, enums);
 
             // 3. Generate Code
             IEntityGenerator generator = new RoslynEntityGenerator();
@@ -180,8 +181,16 @@ namespace DbToEntity.CLI
 
             // For Generate, we overwrite DbContext
             Console.WriteLine("Generating DbContext...");
-            var dbContextFile = generator.GenerateDbContext(tables, config.Namespace, config.DbContextName, config.SeparateBySchema); // Pass flag
+            await WriteEnumsAsync(generator, usedEnums, config);
+
+            var dbContextFile = generator.GenerateDbContext(tables, config.Namespace, config.DbContextName, config.SeparateBySchema, usedEnums);
             await File.WriteAllTextAsync(Path.Combine(config.OutputDirectory, dbContextFile.FileName), dbContextFile.Content);
+
+            if (usedEnums.Count > 0)
+            {
+                Console.WriteLine($"Note: {usedEnums.Count} PostgreSQL enum(s) mapped. Register them where the context is configured:");
+                Console.WriteLine($"      options.UseNpgsql(connectionString, {config.DbContextName}.ConfigureNpgsql)   (requires EF Core 9+)");
+            }
 
             Console.WriteLine("Generation complete.");
         }
@@ -193,6 +202,7 @@ namespace DbToEntity.CLI
             // 1. Get Metadata for specific tables
             IPostgresMetadataProvider metadataProvider = new PostgresMetadataProvider();
             var tables = await metadataProvider.GetTablesAsync(config.ConnectionString, config.Schema, config.IncludedTables);
+            var enums = await metadataProvider.GetEnumsAsync(config.ConnectionString);
 
             if (tables.Count == 0)
             {
@@ -225,7 +235,7 @@ namespace DbToEntity.CLI
                 }
             }
 
-            ResolveForeignKeyNames(tables);
+            var usedEnums = ResolveTypesAndNames(tables, enums);
 
             // 3. Regenerate Entities
             foreach (var table in tables)
@@ -270,7 +280,41 @@ namespace DbToEntity.CLI
                 Console.WriteLine("Warning: DbContext not found. Skipping DbContext update.");
             }
 
+            await WriteEnumsAsync(generator, usedEnums, config);
+            if (usedEnums.Count > 0 && File.Exists(dbContextPath) && !File.ReadAllText(dbContextPath).Contains("ConfigureNpgsql"))
+            {
+                Console.WriteLine($"Warning: these tables use PostgreSQL enums but {config.DbContextName} has no ConfigureNpgsql helper. Run 'generate' to add it.");
+            }
+
             Console.WriteLine("Update complete.");
+        }
+
+        // Order matters: enum class names feed column types, and column types may drop columns/FKs
+        // before navigation names are assigned. Returns the enums referenced by the loaded columns.
+        static List<EnumMetadata> ResolveTypesAndNames(List<TableMetadata> tables, List<EnumMetadata> enums)
+        {
+            EntityNaming.ResolveEnumNames(enums, tables);
+
+            foreach (var warning in TypeMapper.ResolveColumnTypes(tables, enums))
+            {
+                Console.WriteLine($"Warning: {warning}");
+            }
+
+            ResolveForeignKeyNames(tables);
+
+            return enums
+                .Where(e => tables.Any(t => t.Columns.Any(c => c.TypeSchema == e.Schema && (c.DataType == e.Name || c.DataType == "_" + e.Name))))
+                .ToList();
+        }
+
+        static async Task WriteEnumsAsync(IEntityGenerator generator, List<EnumMetadata> enums, GeneratorConfig config)
+        {
+            foreach (var enumType in enums)
+            {
+                Console.WriteLine($"Generating enum for {enumType.Schema}.{enumType.Name} (Enum: {enumType.ClassName})...");
+                var file = generator.GenerateEnum(enumType, config.Namespace);
+                await File.WriteAllTextAsync(Path.Combine(config.OutputDirectory, file.FileName), file.Content);
+            }
         }
 
         // Fills Target/Source class names on every FK from the resolved table class names, then

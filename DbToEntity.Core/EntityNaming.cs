@@ -76,6 +76,31 @@ namespace DbToEntity.Core
             }
         }
 
+        /// <summary>
+        /// Sets <see cref="EnumMetadata.ClassName"/>. Enums whose names clash across schemas get a schema prefix;
+        /// a clash with an entity class name gets an <c>Enum</c> suffix. Run before <see cref="TypeMapper.ResolveColumnTypes"/>.
+        /// </summary>
+        public static void ResolveEnumNames(IEnumerable<EnumMetadata> enums, IEnumerable<TableMetadata> tables)
+        {
+            var enumList = enums.ToList();
+            var used = new HashSet<string>(tables.Select(t => t.ClassName));
+            var duplicates = enumList.GroupBy(e => SanitizeIdentifier(e.Name)).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
+
+            foreach (var e in enumList.OrderBy(e => e.Schema).ThenBy(e => e.Name))
+            {
+                var name = SanitizeIdentifier(e.Name);
+                if (duplicates.Contains(name)) name = SanitizeIdentifier(e.Schema) + name;
+                e.ClassName = MakeUnique(name, "Enum", used);
+            }
+        }
+
+        /// <summary>C# member names for an enum's labels, in label order (deduplicated).</summary>
+        public static List<string> GetEnumMemberNames(EnumMetadata e)
+        {
+            var used = new HashSet<string>();
+            return e.Labels.Select(label => MakeUnique(SanitizeIdentifier(label), "_", used)).ToList();
+        }
+
         // e.g. photo_file_id -> PhotoFile
         private static string FkColumnBase(ForeignKeyMetadata fk)
         {

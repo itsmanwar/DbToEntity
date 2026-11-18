@@ -117,8 +117,19 @@ public class GeneratedCodeTests
         var role = s.Table("roles", "Role", "*id");
         var user = s.Table("users", "User", "*id", "role_id");
         s.ForeignKey("fk_user_role", user, "role_id", role);
+        TypeMapper.ResolveColumnTypes(s.Tables, s.Enums);
 
         var ex = Assert.Throws<InvalidOperationException>(() => new RoslynEntityGenerator().GenerateEntity(user, "X"));
         Assert.Contains("ResolveNavigationNames", ex.Message);
+    }
+
+    [Fact]
+    public void Generator_Throws_WhenColumnTypesNotResolved()
+    {
+        var s = new SchemaBuilder();
+        var user = s.Table("users", "User", "*id");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => new RoslynEntityGenerator().GenerateEntity(user, "X"));
+        Assert.Contains("ResolveColumnTypes", ex.Message);
     }
 }

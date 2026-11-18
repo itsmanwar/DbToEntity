@@ -38,9 +38,15 @@ Status legend: ✅ fixed · 🔲 open
 - Expression indexes are silently dropped, and partial indexes are written as full indexes (no `HasFilter`).
 - **FK target matching ignores schema** (`PostgresMetadataProvider.cs:77-89`, name-only `HashSet` / `FirstOrDefault`). Two schemas with the same table name can attach FKs to the wrong table.
 
-### 1.5 🔲 Unknown Postgres types become `object`
+### 1.5 ✅ Unknown Postgres types became `object`
 - **Where:** `TypeMapper.cs`
-- EF can't map `object`, so the app fails when it builds the model. This affects arrays (`_int4`…), enums, `time`, `interval`, `inet`, `cidr`, `citext`, `xml`, `point`, etc.
+- EF can't map `object`, so the app failed when building the model. This affected arrays (`_int4`…), enums, `time`, `interval`, `inet`, `cidr`, `citext`, `xml`, `point`, etc.
+- **Fixed with F1.** Unsupported types (e.g. PostGIS `geometry`) are now skipped with a warning, along with the PKs, indexes and FKs that use them.
+
+### 1.5b ✅ `timestamp`, `json`/`jsonb`, `money`, `xml`, `citext`, `oid`/`xid` were written as the wrong Postgres type
+- `DateTime` defaults to `timestamptz` in Npgsql 6+, so writes to `timestamp` columns failed with "Cannot write DateTime with Kind=Unspecified…".
+- `string` defaults to `text`, so inserts into `jsonb`/`json`/`xml` columns were rejected.
+- **Fix:** `TypeMapper` emits `HasColumnType(...)` wherever Npgsql's default store type differs. `TypeMappingTests` checks every mapping against the store type EF actually reports.
 
 ### 1.6 🔲 Smaller issues
 - `SanitizeIdentifier` makes up a random name (`Property_xxxx`) when a column name has no valid characters. It isn't deterministic, so two calls give different names.
@@ -55,7 +61,7 @@ Status legend: ✅ fixed · 🔲 open
 ### Correctness (generated code is wrong at runtime)
 | # | Feature | Notes |
 |---|---------|-------|
-| F1 | **Type mapping**: enums, arrays, `time`/`interval`/`inet`/`citext` | Enums: generate a C# `enum` and register it with `MapEnum<T>()`. Arrays: `T[]`. `time`→`TimeOnly`, `interval`→`TimeSpan`, `inet`→`IPAddress`. |
+| F1 ✅ | **Type mapping**: enums, arrays, `time`/`interval`/`inet`/`citext` | Done: 47 built-in types + arrays. Enums become C# enums with `[PgName]` and a generated `AppDbContext.ConfigureNpgsql` helper (EF 9+ `MapEnum`). Open: `numeric(p,s)` precision, multiranges, PostGIS/NodaTime plugins, domains. `update` refreshes enum files but cannot add the helper to an existing DbContext. |
 | F2 | **Delete rules**: `OnDelete(DeleteBehavior.X)` | Read `pg_constraint.confdeltype` (`a`/`r`/`c`/`n`/`d`). Today EF's defaults may disagree with the database. |
 | F3 | **One-to-one detection** | FK columns covered by a unique index/constraint → `HasOne().WithOne()` and a single reference instead of a collection. |
 | F4 | **Generated / identity columns** | `attgenerated = 's'` → `HasComputedColumnSql(..., stored: true)`. `attidentity` → `UseIdentityAlwaysColumn()` / `UseIdentityByDefaultColumn()`. |
@@ -79,7 +85,7 @@ Status legend: ✅ fixed · 🔲 open
 ---
 
 ## 3. Upkeep and technical debt
-- ✅ **Tests added:** `DbToEntity.Tests` (16 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
+- ✅ **Tests added:** `DbToEntity.Tests` (23 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
 - **N+1 queries:** 4 round-trips per table. Load each kind of metadata in one query for all tables.
 - `System.CommandLine 2.0.0-beta4` is an old preview. The stable 2.x API is different.
 - `Program.cs` mixes command wiring with naming and folder-layout logic. That logic should live in Core so it can be tested.
@@ -90,7 +96,7 @@ Status legend: ✅ fixed · 🔲 open
 ## 4. Suggested order
 1. ✅ Navigation naming (1.1)
 2. ✅ Test project, a safety net for everything below
-3. F1 type mapping → F2 delete rules → F3 one-to-one
+3. ✅ F1 type mapping → F2 delete rules → F3 one-to-one
 4. F5 `OnModelCreatingPartial`
 5. Fix `update` (1.2), the SQL parameter (1.3), schema-reading gaps (1.4)
 6. Quick wins Q1–Q5, then F6/F7

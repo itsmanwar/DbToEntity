@@ -12,7 +12,8 @@ namespace DbToEntity.Core
     public interface IEntityGenerator
     {
         GeneratedFile GenerateEntity(TableMetadata table, string namespaceName);
-        GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName, bool separateBySchema = false);
+        GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName, bool separateBySchema = false, IReadOnlyList<EnumMetadata>? enums = null);
+        GeneratedFile GenerateEnum(EnumMetadata enumType, string namespaceName);
         GeneratedFile UpdateDbContext(string existingCode, List<TableMetadata> tables, string dbContextName);
     }
 }

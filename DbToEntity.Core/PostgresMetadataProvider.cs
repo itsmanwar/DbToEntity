@@ -97,7 +97,7 @@ namespace DbToEntity.Core
         private async Task LoadColumnsAsync(NpgsqlConnection conn, TableMetadata table)
         {
             var query = @"
-                SELECT column_name, udt_name, is_nullable, character_maximum_length, column_default
+                SELECT column_name, udt_name, is_nullable, character_maximum_length, column_default, udt_schema
                 FROM information_schema.columns
                 WHERE (@schema IS NULL OR table_schema = @schema) AND table_name = @table
                 ORDER BY ordinal_position
@@ -116,9 +116,40 @@ namespace DbToEntity.Core
                     DataType = reader.GetString(1),
                     IsNullable = reader.GetString(2) == "YES",
                     MaxLength = reader.IsDBNull(3) ? null : reader.GetInt32(3),
-                    DefaultValue = reader.IsDBNull(4) ? null : reader.GetString(4)
+                    DefaultValue = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    TypeSchema = reader.GetString(5)
                 });
             }
+        }
+
+        public async Task<List<EnumMetadata>> GetEnumsAsync(string connectionString)
+        {
+            // All user enums, not only those in the target schema: a table may use an enum from another schema.
+            const string query = @"
+                SELECT n.nspname, t.typname, array_agg(e.enumlabel ORDER BY e.enumsortorder)
+                FROM pg_type t
+                JOIN pg_enum e ON e.enumtypid = t.oid
+                JOIN pg_namespace n ON n.oid = t.typnamespace
+                WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+                GROUP BY n.nspname, t.typname
+                ORDER BY n.nspname, t.typname
+            ";
+
+            var enums = new List<EnumMetadata>();
+            using var conn = new NpgsqlConnection(connectionString);
+            await conn.OpenAsync();
+            using var cmd = new NpgsqlCommand(query, conn);
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                enums.Add(new EnumMetadata
+                {
+                    Schema = reader.GetString(0),
+                    Name = reader.GetString(1),
+                    Labels = reader.GetFieldValue<string[]>(2).ToList()
+                });
+            }
+            return enums;
         }
 
         private async Task LoadPrimaryKeysAsync(NpgsqlConnection conn, TableMetadata table)

@@ -28,10 +28,23 @@ namespace DbToEntity.Core.Models
     public class ColumnMetadata
     {
         public string Name { get; set; } = string.Empty;
-        public string DataType { get; set; } = string.Empty; // Postgres type, e.g. "text", "int4"
+        public string DataType { get; set; } = string.Empty; // Postgres udt_name, e.g. "text", "int4", "_int4" (array), "mood" (enum)
+        public string TypeSchema { get; set; } = "pg_catalog"; // Postgres udt_schema; identifies user-defined types such as enums
         public bool IsNullable { get; set; }
         public int? MaxLength { get; set; }
         public string? DefaultValue { get; set; }
+
+        // Set by TypeMapper.ResolveColumnTypes
+        public string ClrType { get; set; } = string.Empty; // e.g. "int?", "string", "Mood[]"
+        public string? ColumnType { get; set; } // explicit HasColumnType value when Npgsql's default store type would differ
+    }
+
+    public class EnumMetadata
+    {
+        public string Schema { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public List<string> Labels { get; set; } = new(); // in pg_enum.enumsortorder order
+        public string ClassName { get; set; } = string.Empty; // set by EntityNaming.ResolveEnumNames
     }
 
     public class ForeignKeyMetadata

@@ -6,6 +6,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure;
 
 namespace DbToEntity.Tests.Infrastructure;
 
@@ -24,28 +25,40 @@ public sealed class GeneratedModel
 
     public required Dictionary<string, string> Sources { get; init; }
     public required IModel Model { get; init; }
+    public required List<string> Warnings { get; init; }
 
     public IEntityType Entity(string className) =>
         Model.GetEntityTypes().SingleOrDefault(e => e.ClrType.Name == className)
         ?? throw new Xunit.Sdk.XunitException($"Entity '{className}' not in model. Entities: {string.Join(", ", Model.GetEntityTypes().Select(e => e.ClrType.Name))}");
 
-    public static GeneratedModel Build(List<TableMetadata> tables)
+    public static GeneratedModel Build(SchemaBuilder schema) => Build(schema.Tables, schema.Enums);
+
+    /// <summary>Runs the same resolution pipeline as the CLI (enum names → column types → navigation names), then generates.</summary>
+    public static GeneratedModel Build(List<TableMetadata> tables, List<EnumMetadata>? enums = null)
     {
+        enums ??= new List<EnumMetadata>();
+        EntityNaming.ResolveEnumNames(enums, tables);
+        var warnings = TypeMapper.ResolveColumnTypes(tables, enums);
         EntityNaming.ResolveNavigationNames(tables);
 
         var generator = new RoslynEntityGenerator();
         var sources = new Dictionary<string, string>();
+        foreach (var e in enums)
+        {
+            var file = generator.GenerateEnum(e, Namespace);
+            sources[file.FileName] = file.Content;
+        }
         foreach (var table in tables)
         {
             table.Namespace = Namespace;
             var file = generator.GenerateEntity(table, Namespace);
             sources[file.FileName] = file.Content;
         }
-        var context = generator.GenerateDbContext(tables, Namespace, ContextName);
+        var context = generator.GenerateDbContext(tables, Namespace, ContextName, enums: enums);
         sources[context.FileName] = context.Content;
 
         var assembly = Compile(sources);
-        return new GeneratedModel { Sources = sources, Model = CreateModel(assembly) };
+        return new GeneratedModel { Sources = sources, Model = CreateModel(assembly), Warnings = warnings };
     }
 
     private static Assembly Compile(Dictionary<string, string> sources)
@@ -75,7 +88,9 @@ public sealed class GeneratedModel
             ?? throw new Xunit.Sdk.XunitException($"{ContextName} not found in generated assembly");
 
         var builder = (DbContextOptionsBuilder)Activator.CreateInstance(typeof(DbContextOptionsBuilder<>).MakeGenericType(contextType))!;
-        builder.UseNpgsql("Host=unused"); // model building never opens a connection
+        // Model building never opens a connection. Use the generated enum helper exactly as an app would.
+        var configure = contextType.GetMethod("ConfigureNpgsql", BindingFlags.Public | BindingFlags.Static);
+        builder.UseNpgsql("Host=unused", configure?.CreateDelegate<Action<NpgsqlDbContextOptionsBuilder>>());
 
         using var context = (DbContext)Activator.CreateInstance(contextType, builder.Options)!;
         return context.Model;

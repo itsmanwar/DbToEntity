@@ -115,6 +115,19 @@ Uses `Humanizer` to ensure C# conventions:
 -   Column `first_name` -> Property `FirstName`
 -   Foreign Key `role_id` -> Navigation `Role`
 
+### PostgreSQL Types, Arrays and Enums
+-   Postgres types are mapped to the matching .NET / Npgsql types, for example `timestamp` → `DateTime`, `time` → `TimeOnly`, `interval` → `TimeSpan`, `inet` → `IPAddress`, `int4range` → `NpgsqlRange<int>`, `tsvector` → `NpgsqlTsVector`.
+-   Arrays become `T[]` (`integer[]` → `int[]`).
+-   Where Npgsql's default would differ, the exact column type is pinned with `HasColumnType` (e.g. `timestamp without time zone`, `jsonb`).
+-   Columns of unsupported types (e.g. PostGIS `geometry`) are skipped with a warning.
+
+**Enums** are generated as C# enums. When your tables use enums, the generated `DbContext` gets a `ConfigureNpgsql` helper. Pass it to `UseNpgsql` (requires EF Core 9+):
+
+```csharp
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseNpgsql(connectionString, AppDbContext.ConfigureNpgsql));
+```
+
 ---
 
 ### Uninstalling

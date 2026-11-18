@@ -71,7 +71,9 @@ namespace DbToEntity.Core
 
             foreach (var col in table.Columns)
             {
-                var typeName = TypeMapper.Map(col.DataType, col.IsNullable);
+                var typeName = string.IsNullOrEmpty(col.ClrType)
+                    ? throw new InvalidOperationException($"Column '{table.Name}.{col.Name}' has no resolved type. Call TypeMapper.ResolveColumnTypes before generating.")
+                    : col.ClrType;
                 var propName = EntityNaming.GetPropertyName(col.Name, className);
                 var attributes = new List<AttributeSyntax>();
 
@@ -190,7 +192,44 @@ namespace DbToEntity.Core
             return AttributeArgumentList(SeparatedList(args));
         }
 
-        public GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName, bool separateBySchema = false)
+        public GeneratedFile GenerateEnum(EnumMetadata enumType, string namespaceName)
+        {
+            // [PgName] on every member keeps the mapping exact regardless of Npgsql's name translator.
+            var members = EntityNaming.GetEnumMemberNames(enumType).Zip(enumType.Labels, (member, label) =>
+                EnumMemberDeclaration(member).AddAttributeLists(AttributeList(SingletonSeparatedList(
+                    Attribute(ParseName("PgName"), AttributeArgumentList(SingletonSeparatedList(
+                        AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(label))))))))));
+
+            var enumDeclaration = EnumDeclaration(enumType.ClassName)
+                .AddModifiers(Token(SyntaxKind.PublicKeyword))
+                .AddMembers(members.ToArray());
+
+            var cu = CompilationUnit()
+                .AddUsings(UsingDirective(ParseName("NpgsqlTypes")))
+                .AddMembers(NamespaceDeclaration(ParseName(namespaceName)).AddMembers(enumDeclaration))
+                .NormalizeWhitespace();
+
+            return new GeneratedFile { FileName = $"{enumType.ClassName}.cs", Content = cu.ToFullString() };
+        }
+
+        // EF 9+: enums are registered on the Npgsql options builder. The DbContext can't do this itself because
+        // options are built by the caller, so expose a helper to pass to UseNpgsql.
+        private static MemberDeclarationSyntax CreateConfigureNpgsqlMethod(string dbContextName, IEnumerable<EnumMetadata> enums)
+        {
+            var mapCalls = string.Concat(enums.Select(e =>
+                $"npgsql.MapEnum<{e.ClassName}>({Literal(e.Name)}, {Literal(e.Schema)});\n"));
+
+            return ParseMemberDeclaration($@"
+/// <summary>
+/// Registers the PostgreSQL enum types used by this model. Pass it to UseNpgsql:
+/// <c>options.UseNpgsql(connectionString, {dbContextName}.ConfigureNpgsql)</c>
+/// </summary>
+public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure.NpgsqlDbContextOptionsBuilder npgsql)
+{{
+{mapCalls}}}")!;
+        }
+
+        public GeneratedFile GenerateDbContext(List<TableMetadata> tables, string namespaceName, string dbContextName, bool separateBySchema = false, IReadOnlyList<EnumMetadata>? enums = null)
         {
             var dbSets = new List<MemberDeclarationSyntax>();
 
@@ -226,6 +265,11 @@ namespace DbToEntity.Core
                 .AddBaseListTypes(baseClass)
                 .AddMembers(constructor)
                 .AddMembers(dbSets.ToArray());
+
+            if (enums != null && enums.Count > 0)
+            {
+                classDeclaration = classDeclaration.AddMembers(CreateConfigureNpgsqlMethod(dbContextName, enums));
+            }
 
             var statements = new List<StatementSyntax>();
             statements.Add(ExpressionStatement(
@@ -310,6 +354,14 @@ namespace DbToEntity.Core
                         MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasColumnName")))
                                     .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.Name))))));
 
+                    // Only emitted where Npgsql's default store type for the CLR type differs (e.g. timestamp, jsonb).
+                    if (!string.IsNullOrEmpty(col.ColumnType))
+                    {
+                        currentExpression = InvocationExpression(
+                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasColumnType")))
+                            .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.ColumnType))))));
+                    }
+
                     if (!string.IsNullOrEmpty(col.DefaultValue))
                     {
                         currentExpression = InvocationExpression(
@@ -323,7 +375,7 @@ namespace DbToEntity.Core
                             MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("IsRequired")));
                     }
 
-                    if (col.MaxLength.HasValue && (col.DataType.Contains("char") || col.DataType == "text" || col.DataType == "character varying"))
+                    if (col.MaxLength.HasValue && col.ClrType == "string")
                     {
                         currentExpression = InvocationExpression(
                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasMaxLength")))
