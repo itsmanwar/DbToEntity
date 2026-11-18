@@ -102,7 +102,7 @@ Status legend: ✅ fixed · 🔲 open
 - **N+1 queries:** 4 round-trips per table. Load each kind of metadata in one query for all tables.
 - `System.CommandLine 2.0.0-beta4` is an old preview. The stable 2.x API is different.
 - ✅ Naming and folder-layout logic moved from `Program.cs` to Core (`ModelPipeline`, `IncrementalUpdate`). The CLI is now mostly I/O.
-- Leftover code: unused `ToPascalCase`, versions that don't match (Core 1.0.6 vs CLI 1.2.9), Core `<Authors>` set to `DbToEntity`.
+- Leftover code: unused `ToPascalCase`. ✅ ~~versions don't match (Core 1.0.6 vs CLI 1.2.9), Core `<Authors>` set to `DbToEntity`~~: both are 2.0.0 now, with the same author.
 
 ---
 

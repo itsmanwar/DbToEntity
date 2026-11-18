@@ -30,6 +30,17 @@ dotnet tool update --global MH.DbToEntity.CLI
 
 ---
 
+## Upgrading to 2.0
+
+2.0 fixes code that didn't compile or mapped the database incorrectly. Regenerating will change most generated files. Review the diff, and check that:
+
+-   **Your edits live in your own files.** Generated files are overwritten. Move custom code to partial classes, and DbContext configuration to `OnModelCreatingPartial` (see *Customizing Without Losing Changes*).
+-   **Enums are registered.** If your tables use PostgreSQL enums, pass the generated helper: `options.UseNpgsql(connectionString, AppDbContext.ConfigureNpgsql)`. This requires **EF Core 9 or later**.
+-   **Delete behaviour matches the database.** Relationships now get an explicit `OnDelete(...)` from each foreign key's `ON DELETE` action. Before, EF assumed cascade delete for every required relationship.
+-   **Nullability is annotated.** Generated files use `#nullable enable` (`string?`, `= null!`), so code that reads entities may get new nullable warnings in projects with `<Nullable>enable</Nullable>`.
+-   **Views aren't mapped as tables.** Views no longer get `[Table]`, which made EF also map them to a table (and made migrations try to create one).
+-   **`db2entity.json` is new.** `generate` now writes it next to your project so `update` reuses the same settings. Commit it; it never contains a `--connection` value.
+
 ## Troubleshooting
 
 ### Error: "Package type 'DotnetTool' is not supported"
