@@ -347,9 +347,20 @@ namespace DbToEntity.CLI
         static async Task WriteEntityAsync(IEntityGenerator generator, TableMetadata table, GeneratorConfig config)
         {
             var (directory, ns) = ModelPipeline.GetLocation(table, config.OutputDirectory, config.Namespace, config.SeparateBySchema);
-            Directory.CreateDirectory(directory);
             var file = generator.GenerateEntity(table, ns);
-            await File.WriteAllTextAsync(Path.Combine(directory, file.FileName), file.Content);
+            var path = InsideOutput(config, Path.Combine(directory, file.FileName));
+            Directory.CreateDirectory(directory);
+            await File.WriteAllTextAsync(path, file.Content);
+        }
+
+        // Generated paths are built from database names; refuse anything that would leave the output folder.
+        static string InsideOutput(GeneratorConfig config, string path)
+        {
+            var root = Path.GetFullPath(config.OutputDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var full = Path.GetFullPath(path);
+            if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Refusing to write outside the output folder: {full}");
+            return full;
         }
 
         static async Task WriteEnumsAsync(IEntityGenerator generator, List<EnumMetadata> enums, GeneratorConfig config)
@@ -358,13 +369,14 @@ namespace DbToEntity.CLI
             {
                 Console.WriteLine($"Generating enum for {enumType.Schema}.{enumType.Name} (Enum: {enumType.ClassName})...");
                 var (directory, ns) = ModelPipeline.GetEnumLocation(enumType, config.OutputDirectory, config.Namespace, config.SeparateBySchema);
-                Directory.CreateDirectory(directory);
                 var file = generator.GenerateEnum(enumType, ns);
-                await File.WriteAllTextAsync(Path.Combine(directory, file.FileName), file.Content);
+                var path = InsideOutput(config, Path.Combine(directory, file.FileName));
+                Directory.CreateDirectory(directory);
+                await File.WriteAllTextAsync(path, file.Content);
 
                 // Enums used to be written next to the entities. A generated copy left there would now be a
                 // duplicate type, so remove it, but only if this tool wrote it.
-                var oldPath = Path.Combine(config.OutputDirectory, file.FileName);
+                var oldPath = InsideOutput(config, Path.Combine(config.OutputDirectory, file.FileName));
                 if (Path.GetFullPath(oldPath) != Path.GetFullPath(Path.Combine(directory, file.FileName)) && File.Exists(oldPath))
                 {
                     var old = await File.ReadAllTextAsync(oldPath);

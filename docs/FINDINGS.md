@@ -64,8 +64,13 @@ Status legend: ✅ fixed · 🔲 open
 - Found on a real ~500-table database: schema `message_queue` + table `message_queues` → class `MessageQueue`, shadowed by namespace `…MessageQueue` (CS0118). **Fix:** `ModelPipeline.ReservedNames` (root namespace parts; with separate-by-schema also schema folders and `Tables`/`Views`/`MaterializedViews`/`Enums`) → colliding classes get an `Entity` suffix, enums an `Enum` suffix, with a note; a `classNames` override to a reserved name is an error.
 - Enums now go to `<Schema>/Enums/` with a matching namespace (previously the output root). Old generated copies at the root are removed when moved.
 
+### 1.5e ✅ Schema names were used unsanitized as folder and namespace names (security review)
+- Postgres allows almost anything in a quoted schema name. With `--separate-by-schema` the name only went through `Pascalize()`, so a schema like `/evil` produced a rooted path. `Path.Combine` then wrote files outside the output folder (e.g. the drive root), and the enum move could delete a generated file there. Odd but legitimate names (`my-schema`, `2024_data`) produced namespaces that didn't compile. The clash prefix for class names (`<Schema><Class>`) had the same problem.
+- **Fix:** `EntityNaming.SchemaSegment` (only `[A-Za-z0-9]`, no leading digit) is used for every schema-derived folder, namespace, reserved name and class prefix. As a second layer, the CLI refuses to write or delete outside the output folder (`InsideOutput`). The `SanitizeIdentifier` fallback is now deterministic (it was a random GUID). Verified with a real `/evil` schema: the files stay inside and compile.
+- Npgsql itself can't load a database with a type in a schema whose name contains a dot (`"../../evil".kind` → "Given value does not contain a schema"). That fails before generation and writes nothing.
+
 ### 1.6 🔲 Smaller issues
-- `SanitizeIdentifier` makes up a random name (`Property_xxxx`) when a column name has no valid characters. It isn't deterministic, so two calls give different names.
+- ✅ ~~`SanitizeIdentifier` makes up a random name when a name has no valid characters~~: now deterministic (1.5e).
 - ✅ ~~Command handlers exit with code 0 on errors / raw stack traces~~ (Q5).
 - ✅ ~~Views got a `[Table]` attribute~~: EF mapped them to a table *and* the view, so migrations would create a table per view. Found by the fluent-only equivalence test.
 - ✅ ~~`update` must be run with the same naming options as `generate`~~: `generate` saves them to `db2entity.json` (F7).
@@ -103,7 +108,7 @@ Status legend: ✅ fixed · 🔲 open
 ---
 
 ## 3. Upkeep and technical debt
-- ✅ **Tests:** `DbToEntity.Tests` (129 tests) covers name resolution, generate → compile → EF model, and **integration tests against a real PostgreSQL 17** (Testcontainers): every metadata query, plus real writes and reads through the generated `DbContext`. They also prove the `timestamp`/`jsonb` column-type fixes (removing them makes writes fail with Npgsql's real errors). Integration tests are skipped when Docker isn't running. Not covered: the CLI's file I/O (exercised manually).
+- ✅ **Tests:** `DbToEntity.Tests` (142 tests) covers name resolution, generate → compile → EF model, and **integration tests against a real PostgreSQL 17** (Testcontainers): every metadata query, plus real writes and reads through the generated `DbContext`. They also prove the `timestamp`/`jsonb` column-type fixes (removing them makes writes fail with Npgsql's real errors). Integration tests are skipped when Docker isn't running. Not covered: the CLI's file I/O (exercised manually).
 - **N+1 queries:** 4 round-trips per table. Load each kind of metadata in one query for all tables.
 - `System.CommandLine 2.0.0-beta4` is an old preview. The stable 2.x API is different.
 - ✅ Naming and folder-layout logic moved from `Program.cs` to Core (`ModelPipeline`, `IncrementalUpdate`). The CLI is now mostly I/O.

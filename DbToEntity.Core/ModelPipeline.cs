@@ -39,7 +39,7 @@ namespace DbToEntity.Core
             foreach (var table in tables)
             {
                 var baseName = BaseName(table);
-                table.ClassName = duplicates.Contains(baseName) ? table.Schema.Pascalize() + baseName : baseName;
+                table.ClassName = duplicates.Contains(baseName) ? EntityNaming.SchemaSegment(table.Schema) + baseName : baseName;
             }
 
             if (reserved != null && reserved.Count > 0)
@@ -89,7 +89,7 @@ namespace DbToEntity.Core
             names.UnionWith(new[] { "Tables", "Views", "MaterializedViews", "Enums" });
             names.UnionWith(tables.Select(t => t.Schema).Concat(enums.Select(e => e.Schema))
                 .Where(s => !string.IsNullOrEmpty(s) && s != "public")
-                .Select(s => s.Pascalize()));
+                .Select(EntityNaming.SchemaSegment)); // must match GetLocation/GetEnumLocation
             return names;
         }
 
@@ -199,7 +199,7 @@ namespace DbToEntity.Core
             {
                 if (!string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
                 {
-                    var schemaFolder = table.Schema.Pascalize();
+                    var schemaFolder = EntityNaming.SchemaSegment(table.Schema); // safe as folder and namespace part
                     directory = Path.Combine(directory, schemaFolder);
                     ns = $"{ns}.{schemaFolder}";
                 }
@@ -248,7 +248,7 @@ namespace DbToEntity.Core
             {
                 if (!string.IsNullOrEmpty(enumType.Schema) && enumType.Schema != "public")
                 {
-                    var schemaFolder = enumType.Schema.Pascalize();
+                    var schemaFolder = EntityNaming.SchemaSegment(enumType.Schema); // safe as folder and namespace part
                     directory = Path.Combine(directory, schemaFolder);
                     ns = $"{ns}.{schemaFolder}";
                 }

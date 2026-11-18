@@ -21,10 +21,28 @@ namespace DbToEntity.Core
             var pascal = clean.Pascalize();
 
             // 3. Ensure valid start
-            if (string.IsNullOrEmpty(pascal)) return "Property_" + System.Guid.NewGuid().ToString("N").Substring(0, 4); // Fallback
+            if (string.IsNullOrEmpty(pascal)) return "Property_" + StableHash(name); // no usable characters: stable, not random
             if (char.IsDigit(pascal[0])) return "_" + pascal;
 
             return pascal;
+        }
+
+        // FNV-1a: the same input gives the same name on every run (generate and update must agree).
+        private static string StableHash(string value)
+        {
+            var hash = 2166136261u;
+            foreach (var c in value) hash = (hash ^ c) * 16777619u;
+            return hash.ToString("x8");
+        }
+
+        /// <summary>
+        /// A schema name as a C# identifier segment (folder and namespace part): only [A-Za-z0-9], never starting
+        /// with a digit. Schema names come from the database and may contain anything ("my-schema", "../x").
+        /// </summary>
+        public static string SchemaSegment(string schema)
+        {
+            var name = SanitizeIdentifier(schema).Replace("_", "");
+            return name.Length == 0 || char.IsDigit(name[0]) ? "S" + name : name;
         }
 
         /// <summary>Name of the scalar property generated for a column of the given class.</summary>
