@@ -1,5 +1,9 @@
 ﻿using System;
 using System.CommandLine;
+using System.CommandLine.Invocation;
+using System.CommandLine.Parsing;
+using Microsoft.CodeAnalysis.CSharp;
+using Npgsql;
 using System.IO;
 using System.Threading.Tasks;
 using DbToEntity.Core;
@@ -18,96 +22,111 @@ namespace DbToEntity.CLI
         {
             var rootCommand = new RootCommand("PostgreSQL to EF Core Entity Generator");
 
-            var generateCommand = new Command("generate", "Generate entities from database");
-
-            var connectionOption = new Option<string>("--connection", "PostgreSQL connection string");
-
-            var schemaOption = new Option<string>("--schema", "Database schema (optional)");
-
-            var namespaceOption = new Option<string>("--namespace", "Namespace for generated code");
+            var connectionOption = new Option<string>("--connection", "PostgreSQL connection string (default: appsettings.json)");
+            var schemaOption = new Option<string>("--schema", "Database schema (default: all schemas)");
+            var namespaceOption = new Option<string>("--namespace", "Namespace for generated code (default: from the .csproj)");
             namespaceOption.SetDefaultValue("GeneratedEntities");
-
             var outputOption = new Option<string>("--output", "Output directory");
             outputOption.SetDefaultValue("./Entities");
-
-            var tableOption = new Option<string[]>("--tables", "Specific tables to generate (space separated)") { AllowMultipleArgumentsPerToken = true };
-
+            var tableOption = new Option<string[]>("--tables", "Specific tables (space separated)") { AllowMultipleArgumentsPerToken = true };
             var separateBySchemaOption = new Option<bool>("--separate-by-schema", "Organize entities into folders by schema");
+            var contextOption = new Option<string>("--context", "DbContext class name");
+            contextOption.SetDefaultValue("AppDbContext");
+            var noPluralizeOption = new Option<bool>("--no-pluralize", "Keep table names as they are: no singular class names, no plural DbSet/collection names");
+            var fluentOnlyOption = new Option<bool>("--fluent-only", "Plain entity classes without attributes; all mapping in the DbContext");
 
-            generateCommand.AddOption(connectionOption);
-            generateCommand.AddOption(schemaOption);
-            generateCommand.AddOption(namespaceOption);
-            generateCommand.AddOption(outputOption);
-            generateCommand.AddOption(tableOption);
-            generateCommand.AddOption(separateBySchemaOption);
+            var options = new Option[] { connectionOption, schemaOption, namespaceOption, outputOption, tableOption, separateBySchemaOption, contextOption, noPluralizeOption, fluentOnlyOption };
 
-            generateCommand.SetHandler(async (connection, schema, namespaceName, output, tables, separate) =>
+            var generateCommand = new Command("generate", "Generate entities and the DbContext from the database");
+            var updateCommand = new Command("update", "Regenerate specific tables (and related ones) and refresh the DbContext");
+            foreach (var option in options)
             {
-                var finalConnection = GetConnectionString(connection);
-                if (string.IsNullOrEmpty(finalConnection))
+                generateCommand.AddOption(option);
+                updateCommand.AddOption(option);
+            }
+
+            // Builds the config from the parsed options; null (with a message) when the input is invalid.
+            GeneratorConfig? BuildConfig(ParseResult parse, bool requireTables)
+            {
+                var tables = parse.GetValueForOption(tableOption) ?? Array.Empty<string>();
+                if (requireTables && tables.Length == 0)
                 {
-                    Console.WriteLine("Error: Connection string not provided and not found in appsettings.json.");
-                    return;
+                    Console.Error.WriteLine("Error: Please specify tables to update using --tables");
+                    return null;
                 }
 
-                var finalNamespace = GetNamespace(namespaceName, output);
-
-                await RunGenerate(new GeneratorConfig
+                var connection = GetConnectionString(parse.GetValueForOption(connectionOption));
+                if (string.IsNullOrEmpty(connection))
                 {
-                    ConnectionString = finalConnection,
-                    Schema = schema,
-                    Namespace = finalNamespace,
+                    Console.Error.WriteLine("Error: Connection string not provided and not found in appsettings.json.");
+                    return null;
+                }
+
+                var output = parse.GetValueForOption(outputOption)!;
+                var contextName = parse.GetValueForOption(contextOption)!;
+                if (!SyntaxFacts.IsValidIdentifier(contextName))
+                {
+                    Console.Error.WriteLine($"Error: --context '{contextName}' is not a valid C# class name.");
+                    return null;
+                }
+
+                return new GeneratorConfig
+                {
+                    ConnectionString = connection,
+                    Schema = parse.GetValueForOption(schemaOption),
+                    Namespace = GetNamespace(parse.GetValueForOption(namespaceOption)!, output),
                     OutputDirectory = output,
-                    IncludedTables = tables != null ? new List<string>(tables) : new List<string>(),
-                    SeparateBySchema = separate
-                });
-            }, connectionOption, schemaOption, namespaceOption, outputOption, tableOption, separateBySchemaOption);
+                    IncludedTables = tables.ToList(),
+                    SeparateBySchema = parse.GetValueForOption(separateBySchemaOption),
+                    DbContextName = contextName,
+                    Pluralize = !parse.GetValueForOption(noPluralizeOption),
+                    FluentOnly = parse.GetValueForOption(fluentOnlyOption),
+                };
+            }
+
+            generateCommand.SetHandler(async (InvocationContext context) =>
+            {
+                var config = BuildConfig(context.ParseResult, requireTables: false);
+                context.ExitCode = config == null ? 1 : await RunSafely(() => RunGenerate(config));
+            });
+
+            updateCommand.SetHandler(async (InvocationContext context) =>
+            {
+                var config = BuildConfig(context.ParseResult, requireTables: true);
+                context.ExitCode = config == null ? 1 : await RunSafely(() => RunUpdate(config));
+            });
 
             rootCommand.AddCommand(generateCommand);
-
-            var updateCommand = new Command("update", "Update specific entities and DbContext");
-            updateCommand.AddOption(connectionOption);
-            updateCommand.AddOption(schemaOption);
-            updateCommand.AddOption(namespaceOption);
-            updateCommand.AddOption(outputOption);
-            // reused options, tableOption is required for update ideally
-            updateCommand.AddOption(tableOption);
-            updateCommand.AddOption(separateBySchemaOption);
-
-            updateCommand.SetHandler(async (connection, schema, namespaceName, output, tables, separate) =>
-            {
-                if (tables == null || tables.Length == 0)
-                {
-                    Console.WriteLine("Error: Please specify tables to update using --tables");
-                    return;
-                }
-
-                var finalConnection = GetConnectionString(connection);
-                if (string.IsNullOrEmpty(finalConnection))
-                {
-                    Console.WriteLine("Error: Connection string not provided and not found in appsettings.json.");
-                    return;
-                }
-
-                var finalNamespace = GetNamespace(namespaceName, output);
-
-                await RunUpdate(new GeneratorConfig
-                {
-                    ConnectionString = finalConnection,
-                    Schema = schema,
-                    Namespace = finalNamespace,
-                    OutputDirectory = output,
-                    IncludedTables = new List<string>(tables),
-                    SeparateBySchema = separate
-                });
-            }, connectionOption, schemaOption, namespaceOption, outputOption, tableOption, separateBySchemaOption);
-
             rootCommand.AddCommand(updateCommand);
 
             return await rootCommand.InvokeAsync(args);
         }
 
-        static async Task RunGenerate(GeneratorConfig config)
+        // Exit code 0 on success, 1 on any failure, with a one-line message instead of a stack trace.
+        static async Task<int> RunSafely(Func<Task<int>> run)
+        {
+            try
+            {
+                return await run();
+            }
+            catch (NpgsqlException ex)
+            {
+                Console.Error.WriteLine($"Error: database error: {ex.Message}");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"Error: could not write files: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error: {ex.Message}");
+                Console.Error.WriteLine("Set DB2ENTITY_DEBUG=1 for details.");
+                if (Environment.GetEnvironmentVariable("DB2ENTITY_DEBUG") == "1") Console.Error.WriteLine(ex);
+            }
+            return 1;
+        }
+
+        static async Task<int> RunGenerate(GeneratorConfig config)
         {
             Console.WriteLine($"Starting generation for schema '{config.Schema ?? "all"}'...");
 
@@ -116,10 +135,16 @@ namespace DbToEntity.CLI
             var enums = await metadataProvider.GetEnumsAsync(config.ConnectionString);
             Console.WriteLine($"Found {tables.Count} tables.");
 
-            ModelPipeline.ResolveClassNames(tables);
-            var usedEnums = Prepare(tables, enums);
+            if (tables.Count == 0)
+            {
+                Console.Error.WriteLine("Error: no tables found. Check --schema / --tables and the connection's database.");
+                return 1;
+            }
 
-            IEntityGenerator generator = new RoslynEntityGenerator();
+            ModelPipeline.ResolveClassNames(tables, config.Pluralize);
+            var usedEnums = Prepare(tables, enums, config);
+
+            IEntityGenerator generator = new RoslynEntityGenerator(config.FluentOnly);
             Directory.CreateDirectory(config.OutputDirectory);
 
             foreach (var table in tables)
@@ -136,9 +161,10 @@ namespace DbToEntity.CLI
 
             PrintEnumHint(usedEnums, config);
             Console.WriteLine("Generation complete.");
+            return 0;
         }
 
-        static async Task RunUpdate(GeneratorConfig config)
+        static async Task<int> RunUpdate(GeneratorConfig config)
         {
             Console.WriteLine($"Starting update for {config.IncludedTables.Count} table(s)...");
 
@@ -168,13 +194,13 @@ namespace DbToEntity.CLI
             }
             if (missing.Count == config.IncludedTables.Count)
             {
-                Console.WriteLine("No tables found to update.");
-                return;
+                Console.Error.WriteLine("Error: none of the requested tables were found.");
+                return 1;
             }
 
             // Same naming over the same table set as 'generate', so class and navigation names stay stable.
-            ModelPipeline.ResolveClassNames(tables);
-            var usedEnums = Prepare(tables, enums);
+            ModelPipeline.ResolveClassNames(tables, config.Pluralize);
+            var usedEnums = Prepare(tables, enums, config);
             foreach (var table in tables)
             {
                 ModelPipeline.GetLocation(table, config.OutputDirectory, config.Namespace, config.SeparateBySchema);
@@ -193,7 +219,7 @@ namespace DbToEntity.CLI
                 Console.WriteLine($"Also regenerating related tables (their navigations depend on the updated tables): {string.Join(", ", related)}");
             }
 
-            IEntityGenerator generator = new RoslynEntityGenerator();
+            IEntityGenerator generator = new RoslynEntityGenerator(config.FluentOnly);
             Directory.CreateDirectory(config.OutputDirectory);
 
             foreach (var table in toRegenerate)
@@ -221,11 +247,12 @@ namespace DbToEntity.CLI
 
             PrintEnumHint(usedEnums, config);
             Console.WriteLine("Update complete.");
+            return 0;
         }
 
-        static List<EnumMetadata> Prepare(List<TableMetadata> tables, List<EnumMetadata> enums)
+        static List<EnumMetadata> Prepare(List<TableMetadata> tables, List<EnumMetadata> enums, GeneratorConfig config)
         {
-            var (usedEnums, warnings) = ModelPipeline.Prepare(tables, enums);
+            var (usedEnums, warnings) = ModelPipeline.Prepare(tables, enums, config.Pluralize);
             foreach (var warning in warnings)
             {
                 Console.WriteLine($"Warning: {warning}");
@@ -258,7 +285,7 @@ namespace DbToEntity.CLI
             Console.WriteLine($"      options.UseNpgsql(connectionString, {config.DbContextName}.ConfigureNpgsql)   (requires EF Core 9+)");
         }
 
-        static string GetConnectionString(string providedConnection)
+        static string? GetConnectionString(string? providedConnection)
         {
             if (!string.IsNullOrEmpty(providedConnection)) return providedConnection;
 

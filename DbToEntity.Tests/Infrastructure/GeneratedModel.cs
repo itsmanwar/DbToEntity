@@ -5,6 +5,7 @@ using DbToEntity.Core.Models;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure;
 
@@ -33,17 +34,17 @@ public sealed class GeneratedModel
 
     /// <param name="userSources">Hand-written files compiled alongside the generated code (file name → C#),
     /// e.g. a partial DbContext implementing OnModelCreatingPartial.</param>
-    public static GeneratedModel Build(SchemaBuilder schema, Dictionary<string, string>? userSources = null) =>
-        Build(schema.Tables, schema.Enums, userSources);
+    public static GeneratedModel Build(SchemaBuilder schema, Dictionary<string, string>? userSources = null, bool fluentOnly = false, bool pluralize = true) =>
+        Build(schema.Tables, schema.Enums, userSources, fluentOnly, pluralize);
 
     /// <summary>Runs the same resolution pipeline as the CLI (enum names → column types → navigation names), then generates.</summary>
-    public static GeneratedModel Build(List<TableMetadata> tables, List<EnumMetadata>? enums = null, Dictionary<string, string>? userSources = null)
+    public static GeneratedModel Build(List<TableMetadata> tables, List<EnumMetadata>? enums = null, Dictionary<string, string>? userSources = null, bool fluentOnly = false, bool pluralize = true)
     {
         enums ??= new List<EnumMetadata>();
         // Class names come from SchemaBuilder so tests control them; everything after is the CLI's pipeline.
-        var (_, warnings) = ModelPipeline.Prepare(tables, enums);
+        var (_, warnings) = ModelPipeline.Prepare(tables, enums, pluralize);
 
-        var generator = new RoslynEntityGenerator();
+        var generator = new RoslynEntityGenerator(fluentOnly);
         var sources = new Dictionary<string, string>();
         foreach (var e in enums)
         {
@@ -106,7 +107,8 @@ public sealed class GeneratedModel
         builder.UseNpgsql("Host=unused", configure?.CreateDelegate<Action<NpgsqlDbContextOptionsBuilder>>());
 
         using var context = (DbContext)Activator.CreateInstance(contextType, builder.Options)!;
-        return context.Model;
+        // Design-time model: keeps everything (e.g. comments) that the read-optimized runtime model drops.
+        return context.GetService<Microsoft.EntityFrameworkCore.Metadata.IDesignTimeModel>().Model;
     }
 
     private static MetadataReference[] LoadReferences()

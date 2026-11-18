@@ -57,7 +57,9 @@ Status legend: ✅ fixed · 🔲 open
 
 ### 1.6 🔲 Smaller issues
 - `SanitizeIdentifier` makes up a random name (`Property_xxxx`) when a column name has no valid characters. It isn't deterministic, so two calls give different names.
-- Command handlers print `Error:` but still exit with code 0, and a failed connection shows a raw stack trace.
+- ✅ ~~Command handlers exit with code 0 on errors / raw stack traces~~ (Q5).
+- ✅ ~~Views got a `[Table]` attribute~~: EF mapped them to a table *and* the view, so migrations would create a table per view. Found by the fluent-only equivalence test.
+- `update` must be run with the same naming options as `generate` (`--no-pluralize`, `--context`, …); nothing records them yet (F7 config file would).
 - `GetNamespace` treats an explicit `--namespace GeneratedEntities` as "not provided".
 - A `.csproj` name with `-` produces an invalid namespace.
 
@@ -83,16 +85,16 @@ Status legend: ✅ fixed · 🔲 open
 ### Quick wins
 | # | Feature | Notes |
 |---|---------|-------|
-| Q1 | `--context <Name>` | `GeneratorConfig.DbContextName` already exists but the command line never sets it. |
-| Q2 | `--no-pluralize` | For tables that are already singular, or not in English. |
-| Q3 | `--annotations` / `--fluent-only` | Today both styles are emitted, repeating every setting. |
-| Q4 | Comments | `obj_description` / `col_description` → `HasComment()` + `/// <summary>`. |
-| Q5 | Exit codes | Non-zero on failure, so CI and scripts can detect it. |
+| Q1 ✅ | `--context <Name>` | Done; validated as a C# identifier. |
+| Q2 ✅ | `--no-pluralize` | Done: class names keep the table name; DbSets and collections aren't pluralized. DbSet names that would hide `DbContext` members (`Database`, `Model`, …) get a `Set` suffix. |
+| Q3 ✅ | `--fluent-only` | Done: plain entity classes, all mapping fluent (indexes via `HasIndex`). A test proves both styles produce an identical EF model. No annotations-only mode: attributes can't express delete behaviour, principal keys, defaults or column types. |
+| Q4 ✅ | Comments | Done: table/column comments → `/// <summary>` (XML-escaped) and `HasComment(...)` (tables via `ToTable(..., tb => tb.HasComment(...))`; views get doc comments only). *(Queries not yet run against a real database.)* |
+| Q5 ✅ | Exit codes | Done: exit 1 with a one-line message on any failure (stack trace only with `DB2ENTITY_DEBUG=1`). Checked by running the real CLI. |
 
 ---
 
 ## 3. Upkeep and technical debt
-- ✅ **Tests added:** `DbToEntity.Tests` (68 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
+- ✅ **Tests added:** `DbToEntity.Tests` (75 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
 - **N+1 queries:** 4 round-trips per table. Load each kind of metadata in one query for all tables.
 - `System.CommandLine 2.0.0-beta4` is an old preview. The stable 2.x API is different.
 - ✅ Naming and folder-layout logic moved from `Program.cs` to Core (`ModelPipeline`, `IncrementalUpdate`). The CLI is now mostly I/O.
@@ -106,4 +108,4 @@ Status legend: ✅ fixed · 🔲 open
 3. ✅ F1 type mapping → ✅ F2 delete rules → ✅ F3 one-to-one
 4. ✅ F5 `OnModelCreatingPartial`
 5. ✅ Fix `update` (1.2), ✅ the SQL parameter (1.3), schema-reading gaps (1.4)
-6. Quick wins Q1–Q5, then F6/F7
+6. ✅ Quick wins Q1–Q5, then F6/F7

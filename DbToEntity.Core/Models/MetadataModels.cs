@@ -16,6 +16,8 @@ namespace DbToEntity.Core.Models
         public bool IsPartitioned { get; set; }
         public List<IndexMetadata> Indexes { get; set; } = new();
         public ObjectType Type { get; set; } = ObjectType.Table;
+        public string? Comment { get; set; } // COMMENT ON TABLE/VIEW
+        public string DbSetName { get; set; } = string.Empty; // set by ModelPipeline.Prepare
     }
 
     public enum ObjectType
@@ -33,6 +35,7 @@ namespace DbToEntity.Core.Models
         public bool IsNullable { get; set; }
         public int? MaxLength { get; set; }
         public string? DefaultValue { get; set; }
+        public string? Comment { get; set; } // COMMENT ON COLUMN
 
         // Set by TypeMapper.ResolveColumnTypes
         public string ClrType { get; set; } = string.Empty; // e.g. "int?", "string", "Mood[]"

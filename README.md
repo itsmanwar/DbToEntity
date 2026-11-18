@@ -69,6 +69,11 @@ db2entity generate --connection "Host=localhost;Database=mydb;..." --schema "pub
 -   `--namespace`: (Optional) Namespace (default: detected from `.csproj`).
 -   `--separate-by-schema`: (Optional) Organize into subfolders by schema (default: false).
 -   `--tables`: (Optional) Generate only specific tables (space separated).
+-   `--context`: (Optional) DbContext class name (default: `AppDbContext`).
+-   `--no-pluralize`: (Optional) Keep table names as they are: `users` → class `Users`, DbSet `Users` (default: `User` / `Users`).
+-   `--fluent-only`: (Optional) Plain entity classes without attributes; all mapping (including indexes) is in the DbContext.
+
+The command exits with code `1` on any error (bad connection, invalid options, no tables found), so it is safe to use in scripts and CI.
 
 ### 2. Update Specific Tables (Incremental)
 
@@ -85,7 +90,7 @@ db2entity update --tables "users"
 
 **Options:**
 -   `--tables`: (Required) List of tables to update.
--   All other options from `generate` apply.
+-   All other options from `generate` apply. Pass the **same** `--context`, `--no-pluralize`, `--fluent-only`, `--namespace`, `--output` and `--separate-by-schema` values you used for `generate`; otherwise names and locations won't match.
 
 ---
 
@@ -120,6 +125,9 @@ Uses `Humanizer` to ensure C# conventions:
 -   Table `users` -> Class `User`
 -   Column `first_name` -> Property `FirstName`
 -   Foreign Key `role_id` -> Navigation `Role`
+
+### Database Comments
+`COMMENT ON TABLE` / `COMMENT ON COLUMN` text becomes XML doc comments (`/// <summary>`) on the generated classes and properties, plus `HasComment(...)` in the fluent configuration, so IntelliSense shows your schema documentation.
 
 ### Customizing Without Losing Changes
 Generated files are overwritten by every `generate`, so don't edit them. Every generated class is `partial`, so put your additions in **your own files**, which the tool never touches:

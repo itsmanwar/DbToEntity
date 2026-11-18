@@ -9,7 +9,7 @@ namespace DbToEntity.Core
 {
     public class PostgresMetadataProvider : IPostgresMetadataProvider
     {
-        public async Task<List<TableMetadata>> GetTablesAsync(string connectionString, string schema, IEnumerable<string>? tableNames = null)
+        public async Task<List<TableMetadata>> GetTablesAsync(string connectionString, string? schema, IEnumerable<string>? tableNames = null)
         {
             var tables = new List<TableMetadata>();
 
@@ -37,7 +37,8 @@ namespace DbToEntity.Core
                             Schema = reader.GetString(3),
                             Name = reader.GetString(1),
                             IsPartitioned = relKind == 'p',
-                            Type = type
+                            Type = type,
+                            Comment = reader.IsDBNull(4) ? null : reader.GetString(4)
                         });
                     }
                 }
@@ -82,7 +83,7 @@ namespace DbToEntity.Core
         internal static NpgsqlCommand CreateTableQuery(string? schema, IEnumerable<string>? tableNames)
         {
             var sql = @"
-                SELECT c.oid, c.relname, c.relkind, n.nspname
+                SELECT c.oid, c.relname, c.relkind, n.nspname, obj_description(c.oid, 'pg_class')
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE (@schema IS NULL OR n.nspname = @schema)
@@ -108,7 +109,8 @@ namespace DbToEntity.Core
         private async Task LoadColumnsAsync(NpgsqlConnection conn, TableMetadata table)
         {
             var query = @"
-                SELECT column_name, udt_name, is_nullable, character_maximum_length, column_default, udt_schema
+                SELECT column_name, udt_name, is_nullable, character_maximum_length, column_default, udt_schema,
+                       col_description(format('%I.%I', table_schema, table_name)::regclass, ordinal_position)
                 FROM information_schema.columns
                 WHERE (@schema IS NULL OR table_schema = @schema) AND table_name = @table
                 ORDER BY ordinal_position
@@ -128,7 +130,8 @@ namespace DbToEntity.Core
                     IsNullable = reader.GetString(2) == "YES",
                     MaxLength = reader.IsDBNull(3) ? null : reader.GetInt32(3),
                     DefaultValue = reader.IsDBNull(4) ? null : reader.GetString(4),
-                    TypeSchema = reader.GetString(5)
+                    TypeSchema = reader.GetString(5),
+                    Comment = reader.IsDBNull(6) ? null : reader.GetString(6)
                 });
             }
         }

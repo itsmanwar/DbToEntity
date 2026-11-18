@@ -39,8 +39,10 @@ namespace DbToEntity.Core
         /// and <see cref="ForeignKeyMetadata.InverseNavigationName"/> (collection on the principal) for every FK.
         /// Requires ClassName, TargetClassName and SourceClassName to be resolved first.
         /// </summary>
-        public static void ResolveNavigationNames(IEnumerable<TableMetadata> tables)
+        public static void ResolveNavigationNames(IEnumerable<TableMetadata> tables, bool pluralize = true)
         {
+            string Plural(string name) => pluralize ? name.Pluralize() : name;
+
             var tableList = tables.ToList();
             var usedNames = tableList.ToDictionary(
                 t => t,
@@ -71,8 +73,8 @@ namespace DbToEntity.Core
                 {
                     // One-to-one: a single reference, so the name stays singular (User.UserProfile).
                     var name = perSource[fk.SourceClassName] > 1
-                        ? fk.SourceClassName + (fk.IsOneToOne ? FkColumnBase(fk) : FkColumnBase(fk).Pluralize())
-                        : (fk.IsOneToOne ? fk.SourceClassName : fk.SourceClassName.Pluralize());
+                        ? fk.SourceClassName + (fk.IsOneToOne ? FkColumnBase(fk) : Plural(FkColumnBase(fk)))
+                        : (fk.IsOneToOne ? fk.SourceClassName : Plural(fk.SourceClassName));
                     fk.InverseNavigationName = MakeUnique(name, fk.IsOneToOne ? "Inverse" : "Collection", used);
                 }
             }

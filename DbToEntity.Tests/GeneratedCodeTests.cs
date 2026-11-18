@@ -108,6 +108,7 @@ public class GeneratedCodeTests
 
         Assert.Null(entity.FindPrimaryKey());
         Assert.Equal("active_users", entity.GetViewName());
+        Assert.Null(entity.GetTableName()); // regression: a [Table] attribute also mapped views to a table
     }
 
     [Fact]

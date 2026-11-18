@@ -14,6 +14,17 @@ namespace DbToEntity.Core
 {
     public class RoslynEntityGenerator : IEntityGenerator
     {
+        private readonly bool _fluentOnly;
+
+        /// <param name="fluentOnly">
+        /// Plain entity classes without mapping attributes; all configuration (including indexes) goes in the
+        /// DbContext's fluent API. Default: attributes on entities plus fluent configuration.
+        /// </param>
+        public RoslynEntityGenerator(bool fluentOnly = false)
+        {
+            _fluentOnly = fluentOnly;
+        }
+
         public GeneratedFile GenerateEntity(TableMetadata table, string namespaceName)
         {
             var className = table.ClassName; // Use resolved name
@@ -33,11 +44,14 @@ namespace DbToEntity.Core
                     LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.Schema))));
             }
 
-            var classAttributes = new List<AttributeListSyntax>
+            // Only tables get [Table]: on a view EF would map the entity to a table *and* the view (ToView), and
+            // migrations would create that table.
+            var classAttributes = new List<AttributeListSyntax>();
+            if (table.Type == ObjectType.Table)
             {
-                AttributeList(SingletonSeparatedList(
-                    Attribute(IdentifierName("Table"), ToAttributeArgumentList(tableAttributeArgs.ToArray()))))
-            };
+                classAttributes.Add(AttributeList(SingletonSeparatedList(
+                    Attribute(IdentifierName("Table"), ToAttributeArgumentList(tableAttributeArgs.ToArray())))));
+            }
 
             // [Index("Col1", "Col2", Name = "IndexName", IsUnique = true)]
             foreach (var index in table.Indexes)
@@ -103,7 +117,7 @@ namespace DbToEntity.Core
                 var property = PropertyDeclaration(ParseTypeName(typeName), propName)
                     .AddModifiers(Token(SyntaxKind.PublicKeyword));
 
-                if (attributes.Any())
+                if (attributes.Any() && !_fluentOnly)
                 {
                     property = property.AddAttributeLists(AttributeList(SeparatedList(attributes)));
                 }
@@ -112,7 +126,7 @@ namespace DbToEntity.Core
                     AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
                     AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
 
-                properties.Add(property);
+                properties.Add(WithDocComment(property, col.Comment));
             }
 
             // Navigation properties. Names come from EntityNaming.ResolveNavigationNames so they
@@ -137,7 +151,7 @@ namespace DbToEntity.Core
 
                 var navProperty = PropertyDeclaration(ParseTypeName(fk.TargetClassName), RequireName(fk.NavigationName, fk))
                     .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.VirtualKeyword))
-                    .AddAttributeLists(AttributeList(SeparatedList(attributes)))
+                    .AddAttributeLists(_fluentOnly ? Array.Empty<AttributeListSyntax>() : new[] { AttributeList(SeparatedList(attributes)) })
                     .AddAccessorListAccessors(
                         AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
                         AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
@@ -149,12 +163,13 @@ namespace DbToEntity.Core
             foreach (var fk in table.ReferencingForeignKeys)
             {
                 var inverseType = fk.IsOneToOne ? fk.SourceClassName : $"ICollection<{fk.SourceClassName}>";
+                var inverseAttribute = AttributeList(SingletonSeparatedList(
+                    Attribute(IdentifierName("InverseProperty"),
+                        AttributeArgumentList(SingletonSeparatedList(
+                            AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(RequireName(fk.NavigationName, fk)))))))));
                 var collectionProperty = PropertyDeclaration(ParseTypeName(inverseType), RequireName(fk.InverseNavigationName, fk))
                     .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.VirtualKeyword))
-                    .AddAttributeLists(AttributeList(SingletonSeparatedList(
-                        Attribute(IdentifierName("InverseProperty"),
-                            AttributeArgumentList(SingletonSeparatedList(
-                                AttributeArgument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(RequireName(fk.NavigationName, fk))))))))))
+                    .AddAttributeLists(_fluentOnly ? Array.Empty<AttributeListSyntax>() : new[] { inverseAttribute })
                     .AddAccessorListAccessors(
                         AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
                         AccessorDeclaration(SyntaxKind.SetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)));
@@ -163,10 +178,17 @@ namespace DbToEntity.Core
             }
 
 
+            if (_fluentOnly)
+            {
+                // Plain classes: every mapping lives in the DbContext's fluent configuration.
+                classAttributes.Clear();
+            }
+
             var classDeclaration = ClassDeclaration(className)
                 .AddModifiers(Token(SyntaxKind.PublicKeyword), Token(SyntaxKind.PartialKeyword))
                 .AddAttributeLists(classAttributes.ToArray())
                 .AddMembers(properties.ToArray());
+            classDeclaration = WithDocComment(classDeclaration, table.Comment);
 
             var namespaceDeclaration = NamespaceDeclaration(ParseName(namespaceName))
                 .AddMembers(classDeclaration);
@@ -271,7 +293,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                     MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, BaseExpression(), IdentifierName("OnModelCreating")))
                 .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(IdentifierName("modelBuilder")))))));
 
-            statements.AddRange(tables.Select(t => CreateEntityConfiguration(t, principalByFk)));
+            statements.AddRange(tables.Select(t => CreateEntityConfiguration(t, principalByFk, _fluentOnly)));
 
             // Runs last, so configuration in the user's own partial class file overrides the generated configuration.
             statements.Add(ExpressionStatement(
@@ -328,7 +350,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
 
         /// <summary>The DbSet property for a table: <c>public DbSet&lt;User&gt; Users { get; set; }</c>.</summary>
         private static PropertyDeclarationSyntax CreateDbSet(TableMetadata table) =>
-            PropertyDeclaration(ParseTypeName($"DbSet<{table.ClassName}>"), table.ClassName.Pluralize())
+            PropertyDeclaration(ParseTypeName($"DbSet<{table.ClassName}>"), string.IsNullOrEmpty(table.DbSetName) ? table.ClassName.Pluralize() : table.DbSetName)
                 .AddModifiers(Token(SyntaxKind.PublicKeyword))
                 .AddAccessorListAccessors(
                     AccessorDeclaration(SyntaxKind.GetAccessorDeclaration).WithSemicolonToken(Token(SyntaxKind.SemicolonToken)),
@@ -339,7 +361,8 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
             tables.SelectMany(t => t.ReferencingForeignKeys.Select(fk => (fk, t))).ToDictionary(x => x.fk, x => x.t);
 
         /// <summary>One table's fluent configuration: <c>modelBuilder.Entity&lt;User&gt;(entity => { ... });</c></summary>
-        private static StatementSyntax CreateEntityConfiguration(TableMetadata table, IReadOnlyDictionary<ForeignKeyMetadata, TableMetadata> principalByFk)
+        /// <param name="includeIndexes">Emit HasIndex (fluent-only mode; otherwise indexes are [Index] attributes).</param>
+        private static StatementSyntax CreateEntityConfiguration(TableMetadata table, IReadOnlyDictionary<ForeignKeyMetadata, TableMetadata> principalByFk, bool includeIndexes)
         {
             var className = table.ClassName;
 
@@ -353,6 +376,14 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
             if (!string.IsNullOrEmpty(table.Schema) && table.Schema != "public")
             {
                 toTableArgs.Add(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.Schema))));
+            }
+
+            // Table comment: ToTable("t", tb => tb.HasComment("...")). Views have no table builder.
+            if (!string.IsNullOrEmpty(table.Comment) && mappingMethod == "ToTable")
+            {
+                toTableArgs.Add(Argument(SimpleLambdaExpression(Parameter(Identifier("tb")),
+                    InvocationExpression(MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("tb"), IdentifierName("HasComment")))
+                    .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(table.Comment)))))))));
             }
 
             lambdaStatements.Add(ExpressionStatement(
@@ -424,6 +455,13 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                         .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.ColumnType))))));
                 }
 
+                if (!string.IsNullOrEmpty(col.Comment))
+                {
+                    currentExpression = InvocationExpression(
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasComment")))
+                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.Comment))))));
+                }
+
                 if (!string.IsNullOrEmpty(col.DefaultValue))
                 {
                     currentExpression = InvocationExpression(
@@ -445,6 +483,30 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                 }
 
                 lambdaStatements.Add(ExpressionStatement(currentExpression));
+            }
+
+            if (includeIndexes)
+            {
+                foreach (var index in table.Indexes)
+                {
+                    var props = index.Columns.Select(c => EntityNaming.GetPropertyName(c, className)).ToList();
+                    ExpressionSyntax indexBody = props.Count == 1
+                        ? MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("e"), IdentifierName(props[0]))
+                        : AnonymousObjectCreationExpression(SeparatedList(props.Select(p => AnonymousObjectMemberDeclarator(
+                            MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("e"), IdentifierName(p))))));
+
+                    ExpressionSyntax hasIndex = InvocationExpression(
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, IdentifierName("entity"), IdentifierName("HasIndex")))
+                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(SimpleLambdaExpression(Parameter(Identifier("e")), indexBody)))));
+                    hasIndex = InvocationExpression(
+                        MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasIndex, IdentifierName("HasDatabaseName")))
+                        .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(index.Name))))));
+                    if (index.IsUnique)
+                    {
+                        hasIndex = InvocationExpression(MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, hasIndex, IdentifierName("IsUnique")));
+                    }
+                    lambdaStatements.Add(ExpressionStatement(hasIndex));
+                }
             }
 
             // Relationships
@@ -561,7 +623,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
             var statements = onModelCreating.Body!.Statements.ToList();
             foreach (var table in tablesToRefresh)
             {
-                var block = CreateEntityConfiguration(table, principalByFk);
+                var block = CreateEntityConfiguration(table, principalByFk, _fluentOnly);
                 var existing = statements.FindIndex(st => GetConfiguredEntity(st) == table.ClassName);
                 if (existing >= 0)
                 {
@@ -579,7 +641,7 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
 
             // 2. DbSets
             var existingProps = members.OfType<PropertyDeclarationSyntax>().Select(p => p.Identifier.Text).ToHashSet();
-            var newDbSets = tablesToRefresh.Where(t => !existingProps.Contains(t.ClassName.Pluralize())).Select(CreateDbSet).ToList();
+            var newDbSets = tablesToRefresh.Select(CreateDbSet).Where(p => !existingProps.Contains(p.Identifier.Text)).ToList();
             var lastDbSet = members.FindLastIndex(m => m is PropertyDeclarationSyntax);
             members.InsertRange(lastDbSet >= 0 ? lastDbSet + 1 : 0, newDbSets);
 
@@ -644,6 +706,19 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
             "//     Put customizations in a separate file: partial classes for entities, and\r\n" +
             "//     'partial void OnModelCreatingPartial(ModelBuilder modelBuilder)' for the DbContext.\r\n" +
             "// </auto-generated>\r\n");
+
+        // `/// <summary>` from a database comment (XML-escaped, multi-line aware). CRLF like the rest of the output.
+        private static T WithDocComment<T>(T node, string? comment) where T : SyntaxNode
+        {
+            if (string.IsNullOrWhiteSpace(comment)) return node;
+
+            var lines = System.Security.SecurityElement.Escape(comment.Trim())!
+                .Replace("\r\n", "\n").Split('\n');
+            var text = "/// <summary>\r\n"
+                + string.Concat(lines.Select(l => $"/// {l.TrimEnd()}\r\n"))
+                + "/// </summary>\r\n";
+            return node.WithLeadingTrivia(ParseLeadingTrivia(text));
+        }
 
         private static string RequireName(string name, ForeignKeyMetadata fk)
         {

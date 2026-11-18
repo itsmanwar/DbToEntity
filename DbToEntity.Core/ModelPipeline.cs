@@ -17,9 +17,10 @@ namespace DbToEntity.Core
         /// schema prefix (sales.orders → SalesOrder). Must be computed over the same table set every time so
         /// that <c>generate</c> and <c>update</c> agree.
         /// </summary>
-        public static void ResolveClassNames(List<TableMetadata> tables)
+        /// <param name="singularize">False keeps the table name's number (--no-pluralize): users → Users.</param>
+        public static void ResolveClassNames(List<TableMetadata> tables, bool singularize = true)
         {
-            static string BaseName(TableMetadata t) => t.Name.Singularize().Pascalize().Replace("_", "");
+            string BaseName(TableMetadata t) => (singularize ? t.Name.Singularize() : t.Name).Pascalize().Replace("_", "");
 
             var duplicates = tables.GroupBy(BaseName).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
             foreach (var table in tables)
@@ -33,17 +34,35 @@ namespace DbToEntity.Core
         /// Runs every step after class names. Returns the enums referenced by the tables' columns and the
         /// warnings produced (e.g. skipped columns of unsupported types).
         /// </summary>
-        public static (List<EnumMetadata> UsedEnums, List<string> Warnings) Prepare(List<TableMetadata> tables, List<EnumMetadata> enums)
+        /// <param name="pluralize">False (--no-pluralize) keeps DbSet and collection names unpluralized.</param>
+        public static (List<EnumMetadata> UsedEnums, List<string> Warnings) Prepare(List<TableMetadata> tables, List<EnumMetadata> enums, bool pluralize = true)
         {
             EntityNaming.ResolveEnumNames(enums, tables);
             var warnings = TypeMapper.ResolveColumnTypes(tables, enums);
             ResolveForeignKeyClassNames(tables);
-            EntityNaming.ResolveNavigationNames(tables);
+            EntityNaming.ResolveNavigationNames(tables, pluralize);
+            ResolveDbSetNames(tables, pluralize);
 
             var used = enums
                 .Where(e => tables.Any(t => t.Columns.Any(c => c.TypeSchema == e.Schema && (c.DataType == e.Name || c.DataType == "_" + e.Name))))
                 .ToList();
             return (used, warnings);
+        }
+
+        // DbContext members a DbSet must not hide (e.g. a table named "database" with --no-pluralize).
+        private static readonly HashSet<string> DbContextMembers = new() { "Database", "Model", "ChangeTracker", "ContextId" };
+
+        private static void ResolveDbSetNames(List<TableMetadata> tables, bool pluralize)
+        {
+            var used = new HashSet<string>(DbContextMembers);
+            foreach (var table in tables)
+            {
+                var name = pluralize ? table.ClassName.Pluralize() : table.ClassName;
+                var candidate = name;
+                for (var i = 1; used.Contains(candidate); i++) candidate = i == 1 ? name + "Set" : name + "Set" + i;
+                used.Add(candidate);
+                table.DbSetName = candidate;
+            }
         }
 
         // Fills Target/Source class names on every FK from the resolved table class names.
