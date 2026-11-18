@@ -34,6 +34,11 @@ Releases are published to nuget.org by GitHub Actions (`.github/workflows/releas
 
 Never re-publish a changed build under the same version: bump the version (e.g. `2.0.1`) instead.
 
+## Workflow security
+
+- Every action is pinned to a full commit SHA (with the version as a comment), because a tag like `@v1` can be moved to different code. `.github/dependabot.yml` opens weekly PRs to update the pins. Review them before merging, since the publish job can push to nuget.org.
+- Only the `publish` job has `id-token: write`; checkout doesn't keep the GitHub token (`persist-credentials: false`).
+
 ## Troubleshooting
 
 - **403 from `NuGet/login`**: the job is missing `permissions: id-token: write`, or the policy fields don't match (owner, repo, workflow file name, environment).

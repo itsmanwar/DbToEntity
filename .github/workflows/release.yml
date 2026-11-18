@@ -1,6 +1,8 @@
 # Publishes MH.DbToEntity.CLI to nuget.org with Trusted Publishing (no stored API key).
 # Trigger: push a tag matching <Version> in DbToEntity.CLI.csproj, e.g.  git tag v2.0.0 && git push origin v2.0.0
 #
+# Actions are pinned to full commit SHAs (tags can be moved); Dependabot keeps them current.
+#
 # One-time setup (see docs/RELEASING.md):
 #   nuget.org  -> Trusted Publishing policy: owner itsmanwar, repo DbToEntity, workflow release.yml, environment release
 #   GitHub     -> environment "release" (add yourself as required reviewer) and secret NUGET_USER (nuget.org profile name)
@@ -17,9 +19,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # no later step needs the token in .git/config
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: |
             8.0.x
@@ -36,9 +40,11 @@ jobs:
       contents: read
       id-token: write          # lets GitHub issue the OIDC token that NuGet/login exchanges for a temporary key
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # no later step needs the token in .git/config
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: 8.0.x
 
@@ -58,7 +64,7 @@ jobs:
 
       # Short-lived (1 hour) API key from nuget.org; request it right before pushing.
       - name: NuGet login (OIDC -> temporary API key)
-        uses: NuGet/login@v1
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         id: login
         with:
           user: ${{ secrets.NUGET_USER }}
