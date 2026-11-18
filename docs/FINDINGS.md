@@ -26,10 +26,10 @@ Status legend: ✅ fixed · 🔲 open
 - *Partly addressed:* `update` now fills in FK class names and navigation names (`ResolveForeignKeyNames`).
 - **Suggested fix:** load the whole schema's metadata for naming and relationships, and write files only for the requested tables. Move the folder/namespace logic into one helper shared by both commands.
 
-### 1.3 🔲 SQL injection in the `--tables` filter
+### 1.3 ✅ SQL injection in the `--tables` filter
 - **Where:** `PostgresMetadataProvider.cs:33-38`
 - Table names are pasted into the SQL, so a name containing `'` breaks the query.
-- **Fix:** `AND c.relname = ANY(@names)` with a `text[]` parameter.
+- **Fixed:** `AND c.relname = ANY(@names)` with a `text[]` parameter, built in `PostgresMetadataProvider.CreateTableQuery`. Tested by `MetadataQueryTests` (command text and parameters; no database needed).
 
 ### 1.4 🔲 Gaps in reading the schema
 - **Materialized views get no columns.** `information_schema.columns` doesn't list them. Read from `pg_attribute` instead (`attnum > 0 AND NOT attisdropped`).
@@ -87,7 +87,7 @@ Status legend: ✅ fixed · 🔲 open
 ---
 
 ## 3. Upkeep and technical debt
-- ✅ **Tests added:** `DbToEntity.Tests` (52 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
+- ✅ **Tests added:** `DbToEntity.Tests` (55 tests) covers name resolution and generate → compile → EF model. Not covered yet: `PostgresMetadataProvider` (needs a real Postgres, e.g. Testcontainers) and the CLI commands.
 - **N+1 queries:** 4 round-trips per table. Load each kind of metadata in one query for all tables.
 - `System.CommandLine 2.0.0-beta4` is an old preview. The stable 2.x API is different.
 - `Program.cs` mixes command wiring with naming and folder-layout logic. That logic should live in Core so it can be tested.
@@ -100,5 +100,5 @@ Status legend: ✅ fixed · 🔲 open
 2. ✅ Test project, a safety net for everything below
 3. ✅ F1 type mapping → ✅ F2 delete rules → ✅ F3 one-to-one
 4. ✅ F5 `OnModelCreatingPartial`
-5. Fix `update` (1.2), the SQL parameter (1.3), schema-reading gaps (1.4)
+5. Fix `update` (1.2), ✅ the SQL parameter (1.3), schema-reading gaps (1.4)
 6. Quick wins Q1–Q5, then F6/F7

@@ -16,30 +16,10 @@ namespace DbToEntity.Core
             using var conn = new NpgsqlConnection(connectionString);
             await conn.OpenAsync();
 
-            // 1. Get Tables (Parent only or specific tables)
-            // We intentionally filter for 'r' (ordinary table) or 'p' (partitioned table)
-            // BUT we must exclude child partitions. 
-            // In PG, child partitions have pg_inherits entries.
-            var tableQuery = @"
-                SELECT c.oid, c.relname, c.relkind, n.nspname
-                FROM pg_class c
-                JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE (@schema IS NULL OR n.nspname = @schema)
-                AND (@schema IS NOT NULL OR (n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'))
-                AND c.relkind IN ('r', 'p', 'v', 'm')
-                AND NOT EXISTS (SELECT 1 FROM pg_inherits i JOIN pg_class p ON i.inhparent = p.oid WHERE i.inhrelid = c.oid AND p.relkind = 'p') -- Exclude declarative partitions, allow inheritance
-            ";
-
-            if (tableNames != null && tableNames.Any())
+            // 1. Get tables, views and materialized views (declarative partition children excluded)
+            using (var cmd = CreateTableQuery(schema, tableNames))
             {
-                // Simplified filtering for demo purposes; in production use ANY(@names)
-                var names = string.Join("','", tableNames);
-                tableQuery += $" AND c.relname IN ('{names}')";
-            }
-
-            using (var cmd = new NpgsqlCommand(tableQuery, conn))
-            {
-                cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = schema ?? (object)DBNull.Value });
+                cmd.Connection = conn;
                 using (var reader = await cmd.ExecuteReaderAsync())
                 {
                     while (await reader.ReadAsync())
@@ -92,6 +72,37 @@ namespace DbToEntity.Core
             }
 
             return tables;
+        }
+
+        /// <summary>
+        /// Builds the table-list query. User input (schema, --tables names) is passed only as parameters, never
+        /// spliced into the SQL. Child partitions of declaratively partitioned tables are excluded; classic
+        /// inheritance children are kept.
+        /// </summary>
+        internal static NpgsqlCommand CreateTableQuery(string? schema, IEnumerable<string>? tableNames)
+        {
+            var sql = @"
+                SELECT c.oid, c.relname, c.relkind, n.nspname
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE (@schema IS NULL OR n.nspname = @schema)
+                AND (@schema IS NOT NULL OR (n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'))
+                AND c.relkind IN ('r', 'p', 'v', 'm')
+                AND NOT EXISTS (SELECT 1 FROM pg_inherits i JOIN pg_class p ON i.inhparent = p.oid WHERE i.inhrelid = c.oid AND p.relkind = 'p')
+            ";
+
+            var cmd = new NpgsqlCommand();
+            cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = schema ?? (object)DBNull.Value });
+
+            var names = tableNames?.ToArray() ?? Array.Empty<string>();
+            if (names.Length > 0)
+            {
+                sql += " AND c.relname = ANY(@names)";
+                cmd.Parameters.Add(new NpgsqlParameter("names", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Text) { Value = names });
+            }
+
+            cmd.CommandText = sql;
+            return cmd;
         }
 
         private async Task LoadColumnsAsync(NpgsqlConnection conn, TableMetadata table)
