@@ -31,10 +31,13 @@ public sealed class GeneratedModel
         Model.GetEntityTypes().SingleOrDefault(e => e.ClrType.Name == className)
         ?? throw new Xunit.Sdk.XunitException($"Entity '{className}' not in model. Entities: {string.Join(", ", Model.GetEntityTypes().Select(e => e.ClrType.Name))}");
 
-    public static GeneratedModel Build(SchemaBuilder schema) => Build(schema.Tables, schema.Enums);
+    /// <param name="userSources">Hand-written files compiled alongside the generated code (file name → C#),
+    /// e.g. a partial DbContext implementing OnModelCreatingPartial.</param>
+    public static GeneratedModel Build(SchemaBuilder schema, Dictionary<string, string>? userSources = null) =>
+        Build(schema.Tables, schema.Enums, userSources);
 
     /// <summary>Runs the same resolution pipeline as the CLI (enum names → column types → navigation names), then generates.</summary>
-    public static GeneratedModel Build(List<TableMetadata> tables, List<EnumMetadata>? enums = null)
+    public static GeneratedModel Build(List<TableMetadata> tables, List<EnumMetadata>? enums = null, Dictionary<string, string>? userSources = null)
     {
         enums ??= new List<EnumMetadata>();
         EntityNaming.ResolveEnumNames(enums, tables);
@@ -57,17 +60,24 @@ public sealed class GeneratedModel
         var context = generator.GenerateDbContext(tables, Namespace, ContextName, enums: enums);
         sources[context.FileName] = context.Content;
 
-        var assembly = Compile(sources);
+        var assembly = Compile(userSources == null ? sources : sources.Concat(userSources).ToDictionary());
         return new GeneratedModel { Sources = sources, Model = CreateModel(assembly), Warnings = warnings };
     }
 
-    private static Assembly Compile(Dictionary<string, string> sources)
-    {
-        var compilation = CSharpCompilation.Create(
+    /// <summary>Compiler diagnostics for the generated sources with the given nullable context (no emit).</summary>
+    public IReadOnlyList<Diagnostic> Diagnostics(NullableContextOptions nullable) =>
+        CreateCompilation(Sources, nullable).GetDiagnostics();
+
+    private static CSharpCompilation CreateCompilation(Dictionary<string, string> sources, NullableContextOptions nullable) =>
+        CSharpCompilation.Create(
             $"Generated_{Interlocked.Increment(ref _assemblyCounter)}",
             sources.Select(s => CSharpSyntaxTree.ParseText(s.Value, path: s.Key)),
             References.Value,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Disable));
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: nullable));
+
+    private static Assembly Compile(Dictionary<string, string> sources)
+    {
+        var compilation = CreateCompilation(sources, NullableContextOptions.Disable);
 
         using var stream = new MemoryStream();
         var result = compilation.Emit(stream);

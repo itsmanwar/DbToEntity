@@ -116,6 +116,27 @@ Uses `Humanizer` to ensure C# conventions:
 -   Column `first_name` -> Property `FirstName`
 -   Foreign Key `role_id` -> Navigation `Role`
 
+### Customizing Without Losing Changes
+Generated files are overwritten by every `generate`, so don't edit them. Every generated class is `partial`, so put your additions in **your own files**, which the tool never touches:
+
+```csharp
+// AppDbContext.Custom.cs  (runs after the generated configuration, so it can override it)
+public partial class AppDbContext
+{
+    partial void OnModelCreatingPartial(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<User>().HasQueryFilter(u => !u.IsDeleted);
+    }
+}
+
+// User.Custom.cs
+public partial class User
+{
+    [NotMapped]
+    public string FullName => $"{FirstName} {LastName}";
+}
+```
+
 ### PostgreSQL Types, Arrays and Enums
 -   Postgres types are mapped to the matching .NET / Npgsql types, for example `timestamp` → `DateTime`, `time` → `TimeOnly`, `interval` → `TimeSpan`, `inet` → `IPAddress`, `int4range` → `NpgsqlRange<int>`, `tsvector` → `NpgsqlTsVector`.
 -   Arrays become `T[]` (`integer[]` → `int[]`).
