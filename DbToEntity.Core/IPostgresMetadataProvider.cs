@@ -6,6 +6,7 @@ namespace DbToEntity.Core
 {
     public interface IPostgresMetadataProvider
     {
-        Task<List<TableMetadata>> GetTablesAsync(string connectionString, string schema, IEnumerable<string>? tableNames = null);
+        Task<List<TableMetadata>> GetTablesAsync(string connectionString, string? schema, IEnumerable<string>? tableNames = null);
+        Task<List<EnumMetadata>> GetEnumsAsync(string connectionString);
     }
 }

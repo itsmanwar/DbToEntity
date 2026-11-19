@@ -9,46 +9,36 @@ namespace DbToEntity.Core
 {
     public class PostgresMetadataProvider : IPostgresMetadataProvider
     {
-        public async Task<List<TableMetadata>> GetTablesAsync(string connectionString, string schema, IEnumerable<string>? tableNames = null)
+        public async Task<List<TableMetadata>> GetTablesAsync(string connectionString, string? schema, IEnumerable<string>? tableNames = null)
         {
             var tables = new List<TableMetadata>();
 
             using var conn = new NpgsqlConnection(connectionString);
             await conn.OpenAsync();
 
-            // 1. Get Tables (Parent only or specific tables)
-            // We intentionally filter for 'r' (ordinary table) or 'p' (partitioned table)
-            // BUT we must exclude child partitions. 
-            // In PG, child partitions have pg_inherits entries.
-            var tableQuery = @"
-                SELECT c.oid, c.relname, c.relkind
-                FROM pg_class c
-                JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE (@schema IS NULL OR n.nspname = @schema)
-                AND (@schema IS NOT NULL OR (n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'))
-                AND c.relkind IN ('r', 'p')
-                AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid) -- Exclude child partitions
-            ";
-
-            if (tableNames != null && tableNames.Any())
+            // 1. Get tables, views and materialized views (declarative partition children excluded)
+            using (var cmd = CreateTableQuery(schema, tableNames))
             {
-                // Simplified filtering for demo purposes; in production use ANY(@names)
-                var names = string.Join("','", tableNames);
-                tableQuery += $" AND c.relname IN ('{names}')";
-            }
-
-            using (var cmd = new NpgsqlCommand(tableQuery, conn))
-            {
-                cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = schema ?? (object)DBNull.Value });
+                cmd.Connection = conn;
                 using (var reader = await cmd.ExecuteReaderAsync())
                 {
                     while (await reader.ReadAsync())
                     {
+                        var relKind = reader.GetChar(2);
+                        var type = relKind switch
+                        {
+                            'v' => ObjectType.View,
+                            'm' => ObjectType.MaterializedView,
+                            _ => ObjectType.Table
+                        };
+
                         tables.Add(new TableMetadata
                         {
                             Schema = reader.GetString(3),
                             Name = reader.GetString(1),
-                            IsPartitioned = reader.GetChar(2) == 'p'
+                            IsPartitioned = relKind == 'p',
+                            Type = type,
+                            Comment = reader.IsDBNull(4) ? null : reader.GetString(4)
                         });
                     }
                 }
@@ -85,13 +75,68 @@ namespace DbToEntity.Core
             return tables;
         }
 
+        /// <summary>
+        /// Builds the table-list query. User input (schema, --tables names) is passed only as parameters, never
+        /// spliced into the SQL. Child partitions of declaratively partitioned tables are excluded; classic
+        /// inheritance children are kept.
+        /// </summary>
+        internal static NpgsqlCommand CreateTableQuery(string? schema, IEnumerable<string>? tableNames)
+        {
+            var sql = @"
+                SELECT c.oid, c.relname, c.relkind, n.nspname, obj_description(c.oid, 'pg_class')
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE (@schema IS NULL OR n.nspname = @schema)
+                AND (@schema IS NOT NULL OR (n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'))
+                AND c.relkind IN ('r', 'p', 'v', 'm')
+                AND NOT EXISTS (SELECT 1 FROM pg_inherits i JOIN pg_class p ON i.inhparent = p.oid WHERE i.inhrelid = c.oid AND p.relkind = 'p')
+            ";
+
+            var cmd = new NpgsqlCommand();
+            cmd.Parameters.Add(new NpgsqlParameter("schema", NpgsqlTypes.NpgsqlDbType.Text) { Value = schema ?? (object)DBNull.Value });
+
+            var names = tableNames?.ToArray() ?? Array.Empty<string>();
+            if (names.Length > 0)
+            {
+                sql += " AND c.relname = ANY(@names)";
+                cmd.Parameters.Add(new NpgsqlParameter("names", NpgsqlTypes.NpgsqlDbType.Array | NpgsqlTypes.NpgsqlDbType.Text) { Value = names });
+            }
+
+            cmd.CommandText = sql;
+            return cmd;
+        }
+
         private async Task LoadColumnsAsync(NpgsqlConnection conn, TableMetadata table)
         {
+            // pg_attribute rather than information_schema.columns, which omits materialized views. The result
+            // matches information_schema: domains resolve to their base type (udt_name/udt_schema), lengths
+            // match character_maximum_length (varchar/char: typmod - 4; bit/varbit: typmod).
             var query = @"
-                SELECT column_name, udt_name, is_nullable, character_maximum_length, column_default
-                FROM information_schema.columns
-                WHERE (@schema IS NULL OR table_schema = @schema) AND table_name = @table
-                ORDER BY ordinal_position
+                SELECT a.attname,
+                       base.typname,
+                       NOT (a.attnotnull OR (t.typtype = 'd' AND t.typnotnull)) AS is_nullable,
+                       CASE
+                           WHEN base.typname IN ('varchar', 'bpchar') AND COALESCE(NULLIF(a.atttypmod, -1), t.typtypmod) > 4
+                               THEN COALESCE(NULLIF(a.atttypmod, -1), t.typtypmod) - 4
+                           WHEN base.typname IN ('bit', 'varbit') AND COALESCE(NULLIF(a.atttypmod, -1), t.typtypmod) > 0
+                               THEN COALESCE(NULLIF(a.atttypmod, -1), t.typtypmod)
+                       END AS max_length,
+                       pg_get_expr(d.adbin, d.adrelid) AS column_default,
+                       base_ns.nspname,
+                       col_description(c.oid, a.attnum),
+                       a.attidentity::text,
+                       a.attgenerated::text
+                FROM pg_attribute a
+                JOIN pg_class c ON c.oid = a.attrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_type t ON t.oid = a.atttypid
+                JOIN pg_type base ON base.oid = CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END
+                JOIN pg_namespace base_ns ON base_ns.oid = base.typnamespace
+                LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+                WHERE a.attnum > 0 AND NOT a.attisdropped
+                  AND (@schema IS NULL OR n.nspname = @schema)
+                  AND c.relname = @table
+                ORDER BY a.attnum
             ";
 
             using var cmd = new NpgsqlCommand(query, conn);
@@ -101,15 +146,53 @@ namespace DbToEntity.Core
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
+                // pg_attrdef holds both defaults and generation expressions; attgenerated tells them apart.
+                var expression = reader.IsDBNull(4) ? null : reader.GetString(4);
+                var generated = reader.GetString(8); // '' (not generated), 's' (STORED), 'v' (VIRTUAL, PostgreSQL 18+)
                 table.Columns.Add(new ColumnMetadata
                 {
                     Name = reader.GetString(0),
                     DataType = reader.GetString(1),
-                    IsNullable = reader.GetString(2) == "YES",
+                    IsNullable = reader.GetBoolean(2),
                     MaxLength = reader.IsDBNull(3) ? null : reader.GetInt32(3),
-                    DefaultValue = reader.IsDBNull(4) ? null : reader.GetString(4)
+                    DefaultValue = generated == "" ? expression : null,
+                    TypeSchema = reader.GetString(5),
+                    Comment = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    Identity = reader.GetString(7) switch { "a" => IdentityKind.Always, "d" => IdentityKind.ByDefault, _ => IdentityKind.None },
+                    ComputedSql = generated == "" ? null : expression,
+                    IsStoredComputed = generated != "v"
                 });
             }
+        }
+
+        public async Task<List<EnumMetadata>> GetEnumsAsync(string connectionString)
+        {
+            // All user enums, not only those in the target schema: a table may use an enum from another schema.
+            const string query = @"
+                SELECT n.nspname, t.typname, array_agg(e.enumlabel ORDER BY e.enumsortorder)
+                FROM pg_type t
+                JOIN pg_enum e ON e.enumtypid = t.oid
+                JOIN pg_namespace n ON n.oid = t.typnamespace
+                WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+                GROUP BY n.nspname, t.typname
+                ORDER BY n.nspname, t.typname
+            ";
+
+            var enums = new List<EnumMetadata>();
+            using var conn = new NpgsqlConnection(connectionString);
+            await conn.OpenAsync();
+            using var cmd = new NpgsqlCommand(query, conn);
+            using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                enums.Add(new EnumMetadata
+                {
+                    Schema = reader.GetString(0),
+                    Name = reader.GetString(1),
+                    Labels = reader.GetFieldValue<string[]>(2).ToList()
+                });
+            }
+            return enums;
         }
 
         private async Task LoadPrimaryKeysAsync(NpgsqlConnection conn, TableMetadata table)
@@ -154,7 +237,8 @@ namespace DbToEntity.Core
                       (SELECT array_to_string(array_agg(a.attname ORDER BY array_position(con.confkey, a.attnum)), ',')
                        FROM pg_attribute a
                        WHERE a.attrelid = con.confrelid AND a.attnum = ANY(con.confkey)
-                      ) AS target_columns
+                      ) AS target_columns,
+                      con.confdeltype
                   FROM pg_constraint con
                   JOIN pg_class c ON c.oid = con.conrelid
                   JOIN pg_namespace n ON n.oid = con.connamespace
@@ -179,7 +263,15 @@ namespace DbToEntity.Core
                     SourceColumns = reader.GetString(2).Split(',').ToList(),
                     TargetSchema = reader.GetString(3),
                     TargetTable = reader.GetString(4),
-                    TargetColumns = reader.GetString(5).Split(',').ToList()
+                    TargetColumns = reader.GetString(5).Split(',').ToList(),
+                    OnDelete = reader.GetChar(6) switch
+                    {
+                        'c' => ReferentialAction.Cascade,
+                        'n' => ReferentialAction.SetNull,
+                        'r' => ReferentialAction.Restrict,
+                        'd' => ReferentialAction.SetDefault,
+                        _ => ReferentialAction.NoAction // 'a'
+                    }
                 });
             }
         }
@@ -191,17 +283,19 @@ namespace DbToEntity.Core
                 SELECT
                     i.relname as index_name,
                     ix.indisunique as is_unique,
-                    array_to_string(array_agg(a.attname), ',') as column_names
+                    array_to_string(array_agg(a.attname ORDER BY array_position(ix.indkey::int2[], a.attnum)), ',') as column_names,
+                    ix.indpred IS NOT NULL as is_partial,
+                    ix.indexprs IS NOT NULL as has_expressions
                 FROM pg_class t
                 JOIN pg_index ix ON t.oid = ix.indrelid
                 JOIN pg_class i ON i.oid = ix.indexrelid
                 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
                 JOIN pg_namespace n ON n.oid = t.relnamespace
-                WHERE t.relkind = 'r'
+                WHERE t.relkind IN ('r', 'p', 'm') -- ordinary, partitioned, materialized view
                   AND (@schema IS NULL OR n.nspname = @schema)
                   AND t.relname = @table
                   AND ix.indisprimary = false -- Exclude Primary Keys as they are handled separately
-                GROUP BY i.relname, ix.indisunique
+                GROUP BY i.relname, ix.indisunique, ix.indpred IS NOT NULL, ix.indexprs IS NOT NULL
                 ORDER BY i.relname
             ";
 
@@ -220,7 +314,9 @@ namespace DbToEntity.Core
                 {
                     Name = indexName,
                     IsUnique = isUnique,
-                    Columns = columns
+                    Columns = columns,
+                    IsPartial = reader.GetBoolean(3),
+                    HasExpressions = reader.GetBoolean(4)
                 });
             }
         }

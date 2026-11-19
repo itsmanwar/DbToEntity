@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DbToEntity.Core", "DbToEnti
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DbToEntity.CLI", "DbToEntity.CLI\DbToEntity.CLI.csproj", "{BAA27E9A-B38A-4DF5-9DA3-664EF9E6E508}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DbToEntity.Tests", "DbToEntity.Tests\DbToEntity.Tests.csproj", "{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -41,6 +43,18 @@ Global
 		{BAA27E9A-B38A-4DF5-9DA3-664EF9E6E508}.Release|x64.Build.0 = Release|Any CPU
 		{BAA27E9A-B38A-4DF5-9DA3-664EF9E6E508}.Release|x86.ActiveCfg = Release|Any CPU
 		{BAA27E9A-B38A-4DF5-9DA3-664EF9E6E508}.Release|x86.Build.0 = Release|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Debug|x64.Build.0 = Debug|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Debug|x86.Build.0 = Debug|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Release|x64.ActiveCfg = Release|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Release|x64.Build.0 = Release|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Release|x86.ActiveCfg = Release|Any CPU
+		{87F3BBEC-887F-4E32-A7A4-57CCEE3DBC5E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
