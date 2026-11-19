@@ -32,6 +32,8 @@ Releases are published to nuget.org by GitHub Actions (`.github/workflows/releas
    - fails if the tag doesn't match `<Version>` (nuget.org versions can't be deleted, only unlisted),
    - packs, gets a temporary 1-hour API key via `NuGet/login`, and pushes.
 
+**Published by hand?** (`dotnet nuget push` with an API key, as 2.0.0 was.) You can still tag it: the workflow sees the version is already on nuget.org, skips packing and publishing, and finishes green.
+
 Never re-publish a changed build under the same version: bump the version (e.g. `2.0.1`) instead.
 
 ## Workflow security
