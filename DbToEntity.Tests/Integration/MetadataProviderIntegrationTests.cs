@@ -141,4 +141,20 @@ public class MetadataProviderIntegrationTests
         await using var cmd = new NpgsqlCommand("SELECT to_regclass('public.roles') IS NOT NULL", conn);
         Assert.True((bool)(await cmd.ExecuteScalarAsync())!); // roles still exists
     }
+
+    [DockerFact]
+    public async Task GeneratedAndIdentityColumns()
+    {
+        var items = Table(await LoadAsync(), "line_items");
+        ColumnMetadata Col(string name) => items.Columns.Single(c => c.Name == name);
+
+        Assert.Equal(IdentityKind.ByDefault, Col("id").Identity);
+        Assert.Equal(IdentityKind.Always, Col("line_no").Identity);
+        Assert.Equal(IdentityKind.None, Col("price").Identity);
+        Assert.Contains("price", Col("total").ComputedSql);
+        Assert.True(Col("total").IsStoredComputed);
+        Assert.Null(Col("total").DefaultValue); // the generation expression is not a default
+        Assert.Null(Col("price").ComputedSql);
+        Assert.Equal("1", Col("qty").DefaultValue);
+    }
 }

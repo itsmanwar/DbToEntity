@@ -20,7 +20,7 @@
     <PackageId>MH.DbToEntity.CLI</PackageId>
     <!-- Version (not PackageVersion) so the package and the version the tool reports agree. -->
     <Version>2.0.0</Version>
-    <PackageReleaseNotes>2.0.0: generated code compiles for self-references and multiple FKs to one table; PostgreSQL types, arrays and enums; ON DELETE rules; one-to-one and alternate keys; partial DbContext with OnModelCreatingPartial; nullable annotations; db2entity.json settings; --context, --no-pluralize, --fluent-only; comments; exit codes; safer 'update'. Breaking: regenerated output changes, enums need EF Core 9+. See the README section 'Upgrading to 2.0'.</PackageReleaseNotes>
+    <PackageReleaseNotes>2.0.0: generated code compiles for self-references and multiple FKs to one table; PostgreSQL types, arrays and enums; ON DELETE rules; generated and identity columns; one-to-one and alternate keys; partial DbContext with OnModelCreatingPartial; nullable annotations; db2entity.json settings; --context, --no-pluralize, --fluent-only; comments; exit codes; safer 'update'. Breaking: regenerated output changes, enums need EF Core 9+. See the README section 'Upgrading to 2.0'.</PackageReleaseNotes>
     <Authors>Manwar Hossain</Authors>
     <Description>A CLI tool to generate EF Core entities from PostgreSQL, supporting partitioned tables and incremental updates.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

@@ -229,4 +229,33 @@ public class EndToEndIntegrationTests
             Assert.DoesNotContain(All(context, model.ClrType("UserProfile")), p => (int)Get(p, "UserId")! == id);
         }
     }
+
+    // Before generated/identity support, EF wrote line_no and total and PostgreSQL rejected the INSERT.
+    [DockerFact]
+    public async Task GeneratedAndIdentityColumns_AreFilledByTheDatabase()
+    {
+        var model = await ModelAsync();
+        int id;
+
+        await using (var context = model.CreateContext(_db.ConnectionString))
+        {
+            var item = New(model, "LineItem", ("Price", 2.50m), ("Qty", 4));
+            context.Add(item);
+            await context.SaveChangesAsync();
+            id = (int)Get(item, "Id")!;
+            Assert.True(id > 0);
+            Assert.True((long)Get(item, "LineNo")! > 0);   // read back after INSERT
+            Assert.Equal(10.00m, (decimal?)Get(item, "Total"));
+
+            Set(item, "Qty", 6);                           // UPDATE must not write the computed column
+            await context.SaveChangesAsync();
+            Assert.Equal(15.00m, (decimal?)Get(item, "Total"));
+        }
+
+        await using (var context = model.CreateContext(_db.ConnectionString))
+        {
+            var item = All(context, model.ClrType("LineItem")).Single(i => (int)Get(i, "Id")! == id);
+            Assert.Equal(15.00m, (decimal?)Get(item, "Total"));
+        }
+    }
 }

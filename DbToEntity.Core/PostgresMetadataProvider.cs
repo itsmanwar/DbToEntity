@@ -123,7 +123,9 @@ namespace DbToEntity.Core
                        END AS max_length,
                        pg_get_expr(d.adbin, d.adrelid) AS column_default,
                        base_ns.nspname,
-                       col_description(c.oid, a.attnum)
+                       col_description(c.oid, a.attnum),
+                       a.attidentity::text,
+                       a.attgenerated::text
                 FROM pg_attribute a
                 JOIN pg_class c ON c.oid = a.attrelid
                 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -144,15 +146,21 @@ namespace DbToEntity.Core
             using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
+                // pg_attrdef holds both defaults and generation expressions; attgenerated tells them apart.
+                var expression = reader.IsDBNull(4) ? null : reader.GetString(4);
+                var generated = reader.GetString(8); // '' (not generated), 's' (STORED), 'v' (VIRTUAL, PostgreSQL 18+)
                 table.Columns.Add(new ColumnMetadata
                 {
                     Name = reader.GetString(0),
                     DataType = reader.GetString(1),
                     IsNullable = reader.GetBoolean(2),
                     MaxLength = reader.IsDBNull(3) ? null : reader.GetInt32(3),
-                    DefaultValue = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    DefaultValue = generated == "" ? expression : null,
                     TypeSchema = reader.GetString(5),
-                    Comment = reader.IsDBNull(6) ? null : reader.GetString(6)
+                    Comment = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    Identity = reader.GetString(7) switch { "a" => IdentityKind.Always, "d" => IdentityKind.ByDefault, _ => IdentityKind.None },
+                    ComputedSql = generated == "" ? null : expression,
+                    IsStoredComputed = generated != "v"
                 });
             }
         }

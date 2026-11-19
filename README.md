@@ -211,6 +211,7 @@ public partial class User
 -   Arrays become `T[]` (`integer[]` → `int[]`).
 -   Where Npgsql's default would differ, the exact column type is pinned with `HasColumnType` (e.g. `timestamp without time zone`, `jsonb`).
 -   Columns of unsupported types (e.g. PostGIS `geometry`) are skipped with a warning.
+-   **Generated columns** (`GENERATED ALWAYS AS (...) STORED`, and `VIRTUAL` on PostgreSQL 18) get `HasComputedColumnSql(...)`, and **identity columns** get `UseIdentityAlwaysColumn()` / `UseIdentityByDefaultColumn()`, key or not. EF then never writes them and reads the database's values back after `SaveChanges`. Requires PostgreSQL 12 or later.
 
 **Enums** are generated as C# enums. When your tables use enums, the generated `DbContext` gets a `ConfigureNpgsql` helper. Pass it to `UseNpgsql` (requires EF Core 9+):
 

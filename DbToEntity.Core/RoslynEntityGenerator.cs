@@ -501,6 +501,27 @@ public static void ConfigureNpgsql(Npgsql.EntityFrameworkCore.PostgreSQL.Infrast
                         .WithArgumentList(ArgumentList(SingletonSeparatedList(Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.Comment))))));
                 }
 
+                // Generated columns are read-only for EF; without this it writes them and PostgreSQL rejects the INSERT.
+                if (!string.IsNullOrEmpty(col.ComputedSql))
+                {
+                    currentExpression = InvocationExpression(
+                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName("HasComputedColumnSql")))
+                       .WithArgumentList(ArgumentList(SeparatedList(new[]
+                       {
+                           Argument(LiteralExpression(SyntaxKind.StringLiteralExpression, Literal(col.ComputedSql))),
+                           Argument(LiteralExpression(col.IsStoredComputed ? SyntaxKind.TrueLiteralExpression : SyntaxKind.FalseLiteralExpression))
+                               .WithNameColon(NameColon("stored"))
+                       })));
+                }
+
+                // Identity columns: EF then leaves the value to the database (also for non-key columns).
+                if (col.Identity != IdentityKind.None)
+                {
+                    var method = col.Identity == IdentityKind.Always ? "UseIdentityAlwaysColumn" : "UseIdentityByDefaultColumn";
+                    currentExpression = InvocationExpression(
+                       MemberAccessExpression(SyntaxKind.SimpleMemberAccessExpression, currentExpression, IdentifierName(method)));
+                }
+
                 if (!string.IsNullOrEmpty(col.DefaultValue))
                 {
                     currentExpression = InvocationExpression(
