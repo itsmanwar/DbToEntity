@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest   # has Docker, so the PostgreSQL integration tests run too
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # no later step needs the token in .git/config
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Test
+        run: dotnet test --configuration Release --logger "console;verbosity=normal"
+
+      - name: Pack (smoke test)
+        run: dotnet pack DbToEntity.CLI --configuration Release --output artifacts
